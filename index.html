@@ -359,15 +359,17 @@ function migrate(s){
 
 function save(){
   setSyncDot('syncing');
+  ignoreNextSnapshot=true; // block incoming snapshot immediately
   if(saveTimeout) clearTimeout(saveTimeout);
   saveTimeout=setTimeout(async()=>{
     try{
-      ignoreNextSnapshot=true;
       const clean=JSON.parse(JSON.stringify(state));
       clean.tabs.forEach(tab=>{if(tab.tasks) tab.tasks.forEach(t=>{delete t._subOpen;delete t._renaming;(t.subtasks||[]).forEach(s=>delete s._renaming);});});
       await setDoc(DOC_REF,clean);
       setSyncDot('ok');
-    }catch(e){console.error(e);setSyncDot('err');}
+      // allow snapshots again after a short delay
+      setTimeout(()=>{ ignoreNextSnapshot=false; }, 2000);
+    }catch(e){console.error(e);setSyncDot('err');ignoreNextSnapshot=false;}
   },800);
 }
 
@@ -375,11 +377,23 @@ async function init(){
   try{
     const snap=await getDoc(DOC_REF);
     if(snap.exists()) state=migrate(snap.data());
+    else {
+      // first time: save default state
+      await setDoc(DOC_REF, JSON.parse(JSON.stringify(state)));
+    }
     document.getElementById('loadingScreen').style.display='none';
     setSyncDot('ok'); render();
     onSnapshot(DOC_REF,snap=>{
-      if(ignoreNextSnapshot){ignoreNextSnapshot=false;return;}
-      if(snap.exists()){const prev=state.activeTab;state=migrate(snap.data());state.activeTab=prev;render();}
+      if(ignoreNextSnapshot){
+        // don't reset flag here — save() resets after 2s
+        return;
+      }
+      if(snap.exists()){
+        const prev=state.activeTab;
+        state=migrate(snap.data());
+        state.activeTab=prev;
+        render();
+      }
     });
   }catch(e){console.error(e);document.querySelector('.loading-text').textContent='Erro ao conectar.';setSyncDot('err');}
 }
@@ -858,7 +872,7 @@ function bindVendasEvents(){
 // ── Pedidos ──
 function buildPedidosHTML(){
   const tab=state.tabs.find(t=>t.id==='pedidos');
-  if(!tab) return '';
+  if(!tab){ return '<div class="empty">Aba pedidos não encontrada.</div>'; }
   if(!tab.tasks) tab.tasks=[];
   const pending=tab.tasks.filter(t=>!t.done).length;
   const total=tab.tasks.length;
