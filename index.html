@@ -620,7 +620,12 @@ function bindListEvents(tabId){
       const task=tab?.tasks.find(t=>t.id===cb.dataset.taskid);
       if(!task) return;
       task.done=cb.checked;
-      if(task.done){addToHistory(task,tab.name);tab.tasks=tab.tasks.filter(t=>t.id!==task.id);}
+      if(task.done && HIST_TAGS.includes(task.tag)){
+        // pedidos/entregas: save to history and remove from list
+        addToHistory(task,tab.name);
+        tab.tasks=tab.tasks.filter(t=>t.id!==task.id);
+      }
+      // all other tasks: just stay strikethrough (done=true)
       save();render();
     });
   });
@@ -928,7 +933,13 @@ function buildOrcHTML(){
     <div class="calc-section" id="calcLines">${linesHTML}</div>
     <button class="calc-add-line-btn" id="addCalcLine">+ adicionar filamento ao projeto</button>
     <div style="margin-top:14px;">
-      <div class="field"><label>Desconto total (R$) — opcional</label><input type="number" id="calcDiscount" placeholder="0,00" min="0" step="0.01"></div>
+      <div class="field" style="position:relative;">
+        <label>Desconto — opcional</label>
+        <div style="display:flex;align-items:center;gap:0;">
+          <input type="number" id="calcDiscount" placeholder="0" min="0" max="100" step="0.1" style="border-radius:var(--radius-sm) 0 0 var(--radius-sm);border-right:none;">
+          <div style="padding:0 10px;background:var(--surface3);border:1px solid var(--border);border-left:none;border-radius:0 var(--radius-sm) var(--radius-sm) 0;font-size:13px;color:var(--text2);font-family:'DM Mono',monospace;height:42px;display:flex;align-items:center;">%</div>
+        </div>
+      </div>
       <button class="btn" id="calcBtn" style="width:100%;margin-top:4px;">Calcular preços</button>
     </div>
     <div class="result-section" id="calcResult">
@@ -1006,7 +1017,7 @@ function bindCalcLineEvents(){
 }
 
 function calcOrc(){
-  const discount=parseFloat(document.getElementById('calcDiscount')?.value)||0;
+  const discountPct=Math.min(100,Math.max(0,parseFloat(document.getElementById('calcDiscount')?.value)||0));
   const result=document.getElementById('calcResult');
   const validLines=calcLines.map(line=>{
     const fil=state.filaments.find(f=>f.id===line.filId);
@@ -1017,7 +1028,8 @@ function calcOrc(){
   if(validLines.length===0){result?.classList.remove('show');return;}
   const totalCost=validLines.reduce((s,l)=>s+l.cost,0);
   const pj=totalCost*3,pf=totalCost*5;
-  const pjF=Math.max(0,pj-discount),pfF=Math.max(0,pf-discount);
+  const discountMultiplier=1-(discountPct/100);
+  const pjF=pj*discountMultiplier, pfF=pf*discountMultiplier;
   const bd=document.getElementById('resultBreakdown');
   if(bd) bd.innerHTML=validLines.map(l=>`<div style="display:flex;align-items:center;gap:8px;font-size:11px;font-family:'DM Mono',monospace;color:var(--text2);">
     <div style="width:9px;height:9px;border-radius:50%;background:${l.fil.color};border:1px solid rgba(255,255,255,0.15);flex-shrink:0;"></div>
@@ -1025,11 +1037,11 @@ function calcOrc(){
     <span>${l.grams}g</span>
     <span style="color:var(--text);min-width:72px;text-align:right;">R$ ${l.cost.toFixed(2)}</span>
   </div>`).join('')+(validLines.length>1?`<div style="border-top:1px solid var(--border);padding-top:6px;font-size:11px;font-family:'DM Mono',monospace;color:var(--text3);margin-top:4px;">${validLines.length} filamentos · ${validLines.reduce((s,l)=>s+l.grams,0).toFixed(0)}g total</div>`:'');
-  document.getElementById('resultCost').innerHTML=`Custo total: <strong>R$ ${totalCost.toFixed(2)}</strong>${discount>0?` &nbsp;|&nbsp; Desconto: <strong>−R$ ${discount.toFixed(2)}</strong>`:''}`;
+  document.getElementById('resultCost').innerHTML=`Custo total: <strong>R$ ${totalCost.toFixed(2)}</strong>${discountPct>0?` &nbsp;|&nbsp; Desconto: <strong>${discountPct}%</strong>`:''}`;
   document.getElementById('pjVal').textContent='R$ '+pjF.toFixed(2);
   document.getElementById('pfVal').textContent='R$ '+pfF.toFixed(2);
-  document.getElementById('pjOrig').textContent=discount>0?`sem desconto: R$ ${pj.toFixed(2)}`:'';
-  document.getElementById('pfOrig').textContent=discount>0?`sem desconto: R$ ${pf.toFixed(2)}`:'';
+  document.getElementById('pjOrig').textContent=discountPct>0?`sem desconto: R$ ${pj.toFixed(2)}`:'';
+  document.getElementById('pfOrig').textContent=discountPct>0?`sem desconto: R$ ${pf.toFixed(2)}`:'';
   result.classList.add('show');
 }
 
