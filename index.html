@@ -337,6 +337,7 @@ function migrate(s){
     if(tab.tasks) tab.tasks.forEach(t=>{
       if(!t.subtasks) t.subtasks=[];
       if(!t.filamentLines) t.filamentLines=[];
+      if(t.cliente===undefined) t.cliente='';
       if(t._subOpen===undefined) t._subOpen=false;
       if(!t.tag) t.tag='none';
       if(t._renaming===undefined) t._renaming=false;
@@ -411,6 +412,7 @@ function addToHistory(task,tabName){
   // calc custo: if gramasGastas is set, use filament cost — otherwise 0
   const entry={
     id:uid(), taskText:task.text, tag:task.tag,
+    cliente:task.cliente||'',
     valorPago:task.valorPago||'', gramasGastas:task.gramasGastas||'',
     custoPorGrama:task.custoPorGrama||0,
     subtasks:(task.subtasks||[]).map(s=>({text:s.text,done:s.done})),
@@ -519,6 +521,10 @@ function buildTaskHTML(task,tabId){
   const pedidoFieldsHTML=isPedido?`<div class="task-pedido-fields">
     ${filamentInfoHTML}
     <div class="task-pedido-row" style="margin-top:${task.filamentLines&&task.filamentLines.length>0?'6px':'0'};">
+      <span class="task-pedido-label">👤 Cliente</span>
+      <input class="task-pedido-inp" type="text" placeholder="Nome do cliente" data-pedfield="cliente" data-taskid="${task.id}" data-tabid="${tabId}" value="${esc(task.cliente||'')}">
+    </div>
+    <div class="task-pedido-row">
       <span class="task-pedido-label">💰 Valor pago</span>
       <input class="task-pedido-inp valor" type="number" min="0" step="0.01" placeholder="R$ 0,00" data-pedfield="valorPago" data-taskid="${task.id}" data-tabid="${tabId}" value="${esc(task.valorPago||'')}">
     </div>
@@ -670,8 +676,9 @@ function buildHistSlots(entries){
     const custo=entry.custoPorGrama?grama*entry.custoPorGrama:0;
     const lucro=pago-custo;
     const subHTML=entry.subtasks&&entry.subtasks.length>0?`<div class="hist-task-subs">${entry.subtasks.length} subtarefa${entry.subtasks.length>1?'s':''}: ${entry.subtasks.map(s=>esc(s.text)).join(', ')}</div>`:'';
+    const clienteHTML=entry.cliente?`<div style="font-size:11px;color:var(--accent5);font-family:'DM Mono',monospace;margin-top:3px;">👤 ${esc(entry.cliente)}</div>`:'';
     const moneyHTML=(pago>0||grama>0)?`<div class="hist-money-row">${pago>0?`<div class="hist-money-item pago"><div class="hist-money-label">Valor pago</div><div class="hist-money-val">${fmtR(pago)}</div></div>`:''}${grama>0?`<div class="hist-money-item custo"><div class="hist-money-label">Gramas usadas</div><div class="hist-money-val">${grama}g</div></div>`:''}${(pago>0&&custo>0)?`<div class="hist-money-item lucro"><div class="hist-money-label">Lucro estimado</div><div class="hist-money-val">${fmtR(lucro)}</div></div>`:''}</div>`:'';
-    return `<div class="hist-slot"><div class="hist-slot-header"><span class="hist-slot-num">slot ${idx+1}</span><span class="hist-slot-date">${fmtDate(entry.completedAt)}</span><span class="hist-slot-clear" data-histclear="${entry.id}">limpar</span></div><div class="hist-card"><div class="hist-task-row"><span class="hist-check">✓</span><div class="hist-task-info"><div class="hist-task-name">${esc(entry.taskText)}</div><div style="font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;margin-top:1px;">${esc(entry.tabName)}</div>${subHTML}${moneyHTML}</div><span class="hist-task-tag ${entry.tag}">${TAG_LABELS[entry.tag]}</span></div></div></div>`;
+    return `<div class="hist-slot"><div class="hist-slot-header"><span class="hist-slot-num">slot ${idx+1}</span><span class="hist-slot-date">${fmtDate(entry.completedAt)}</span><span class="hist-slot-clear" data-histclear="${entry.id}">limpar</span></div><div class="hist-card"><div class="hist-task-row"><span class="hist-check">✓</span><div class="hist-task-info"><div class="hist-task-name">${esc(entry.taskText)}</div><div style="font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;margin-top:1px;">${esc(entry.tabName)}</div>${clienteHTML}${subHTML}${moneyHTML}</div><span class="hist-task-tag ${entry.tag}">${TAG_LABELS[entry.tag]}</span></div></div></div>`;
   }).join('');
 }
 function bindHistEvents(){
@@ -889,12 +896,21 @@ function buildPedidosHTML(){
   const total=tab.tasks.length;
   const items=tab.tasks.map(task=>buildTaskHTML(task,'pedidos')).join('');
   return `<div class="page-title">📦 Pedidos${total>0?`<span class="badge">${pending} em aberto</span>`:''}</div>
-    <div style="display:flex;gap:8px;margin-bottom:14px;">
-      <input type="text" id="newPedido" placeholder="Novo pedido / projeto..." autocomplete="off" style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 13px;color:var(--text);font-size:15px;font-family:'Syne',sans-serif;outline:none;" onfocus="this.style.borderColor='var(--accent5)'" onblur="this.style.borderColor='var(--border)'">
-      <button class="btn" id="addPedidoBtn" style="background:var(--accent5);color:#fff;">+</button>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:14px;margin-bottom:16px;display:flex;flex-direction:column;gap:8px;">
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="newPedido" placeholder="Nome do projeto..." autocomplete="off"
+          style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-size:14px;font-family:'Syne',sans-serif;outline:none;transition:border-color 0.15s;"
+          onfocus="this.style.borderColor='var(--accent5)'" onblur="this.style.borderColor='var(--border)'">
+      </div>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="newPedidoCliente" placeholder="Nome do cliente..." autocomplete="off"
+          style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-size:14px;font-family:'Syne',sans-serif;outline:none;transition:border-color 0.15s;"
+          onfocus="this.style.borderColor='var(--accent5)'" onblur="this.style.borderColor='var(--border)'">
+        <button class="btn" id="addPedidoBtn" style="background:var(--accent5);color:#fff;padding:10px 20px;">+ Pedido</button>
+      </div>
     </div>
     <div class="task-list" id="pedidosList">
-      ${items||'<div class="empty">Nenhum pedido em aberto.<br>Crie um manualmente ou transfira um orçamento.</div>'}
+      ${items||'<div class="empty">Nenhum pedido em aberto.<br>Crie um acima ou transfira um orçamento.</div>'}
     </div>`;
 }
 
@@ -905,18 +921,23 @@ function bindPedidosEvents(){
   if(!tab) return;
   if(!tab.tasks) tab.tasks=[];
 
+  const inpCliente=document.getElementById('newPedidoCliente');
   function addPedido(){
     if(!inp||!inp.value.trim()) return;
     tab.tasks.push({
       id:uid(), text:inp.value.trim(), done:false, tag:'pedidos',
+      cliente:(inpCliente?.value||'').trim(),
       valorPago:'', gramasGastas:'', custoPorGrama:0,
-      subtasks:[], _subOpen:false, _renaming:false
+      filamentLines:[], subtasks:[], _subOpen:false, _renaming:false
     });
-    inp.value=''; save(); render();
+    inp.value='';
+    if(inpCliente) inpCliente.value='';
+    save(); render();
     setTimeout(()=>document.getElementById('newPedido')?.focus(),40);
   }
   if(btn) btn.addEventListener('click',addPedido);
-  if(inp) inp.addEventListener('keydown',e=>{if(e.key==='Enter')addPedido();});
+  if(inp) inp.addEventListener('keydown',e=>{if(e.key==='Enter'){if(inpCliente&&!inpCliente.value.trim())inpCliente.focus();else addPedido();}});
+  if(inpCliente) inpCliente.addEventListener('keydown',e=>{if(e.key==='Enter')addPedido();});
   // reuse list events bound to tabId='pedidos'
   bindListEvents('pedidos');
 }
@@ -1015,7 +1036,8 @@ function openTransferModal(){
   modal.className='modal-overlay';
   modal.innerHTML=`<div class="modal">
     <div class="modal-title">📦 Enviar para Pedidos</div>
-    <div class="field"><label>Nome do projeto / cliente</label><input type="text" id="transferName" placeholder="ex: Suporte para notebook" autocomplete="off"></div>
+    <div class="field"><label>Nome do projeto</label><input type="text" id="transferName" placeholder="ex: Suporte para notebook" autocomplete="off"></div>
+    <div class="field"><label>Nome do cliente</label><input type="text" id="transferCliente" placeholder="ex: João Silva" autocomplete="off"></div>
     <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);line-height:2;margin-bottom:4px;">
       ${lastCalcResult.validLines.map(l=>`<div style="display:flex;align-items:center;gap:7px;"><div style="width:8px;height:8px;border-radius:50%;background:${l.fil.color};flex-shrink:0;border:1px solid rgba(255,255,255,0.15);"></div><span style="flex:1;color:var(--text2);">${esc(l.fil.name)}</span><span>${l.grams}g</span><span style="color:var(--text);width:80px;text-align:right;">R$ ${l.cost.toFixed(2)}</span></div>`).join('')}
       <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;display:flex;justify-content:space-between;">
@@ -1033,6 +1055,7 @@ function openTransferModal(){
   document.getElementById('transferCancel').addEventListener('click',()=>modal.remove());
   document.getElementById('transferConfirm').addEventListener('click',()=>{
     const name=document.getElementById('transferName').value.trim();
+    const cliente=(document.getElementById('transferCliente')?.value||'').trim();
     if(!name){document.getElementById('transferName').focus();return;}
     const pedidosTab=state.tabs.find(t=>t.id==='pedidos');
     if(!pedidosTab){alert('Aba Pedidos não encontrada.');return;}
@@ -1042,6 +1065,7 @@ function openTransferModal(){
     }));
     pedidosTab.tasks.push({
       id:uid(), text:name, done:false, tag:'pedidos',
+      cliente,
       valorPago:lastCalcResult.pfF.toFixed(2),
       gramasGastas:lastCalcResult.totalGrams.toFixed(0),
       custoPorGrama:lastCalcResult.avgCostPerGrama,
