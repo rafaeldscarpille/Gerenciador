@@ -336,6 +336,7 @@ function migrate(s){
   s.tabs.forEach(tab=>{
     if(tab.tasks) tab.tasks.forEach(t=>{
       if(!t.subtasks) t.subtasks=[];
+      if(!t.filamentLines) t.filamentLines=[];
       if(t._subOpen===undefined) t._subOpen=false;
       if(!t.tag) t.tag='none';
       if(t._renaming===undefined) t._renaming=false;
@@ -506,8 +507,18 @@ function buildTaskHTML(task,tabId){
   const isPedido=tag==='pedidos';
   const progHTML=subTotal>0?`<div class="sub-prog"><div class="sub-prog-bar"><div class="sub-prog-fill" style="width:${Math.round((subDone/subTotal)*100)}%"></div></div><span class="sub-prog-text">${subDone}/${subTotal}</span></div>`:'';
   const textHTML=task._renaming?`<input class="task-rename-inp" id="ren_${task.id}" data-renid="${task.id}" data-tabid="${tabId}" value="${esc(task.text)}">`:`<span class="task-text">${esc(task.text)}</span>`;
+  const filamentInfoHTML=(isPedido&&task.filamentLines&&task.filamentLines.length>0)?`
+    <div style="margin-top:5px;padding:7px 10px;background:var(--surface3);border:1px solid var(--border);border-radius:var(--radius-sm);display:flex;flex-direction:column;gap:4px;">
+      ${task.filamentLines.map(l=>`<div style="display:flex;align-items:center;gap:7px;font-size:11px;font-family:'DM Mono',monospace;color:var(--text2);">
+        <div style="width:8px;height:8px;border-radius:50%;background:${l.color};border:1px solid rgba(255,255,255,0.15);flex-shrink:0;"></div>
+        <span style="flex:1;">${esc(l.name)}</span>
+        <span>${l.grams}g</span>
+        <span style="color:var(--text3);">R$ ${l.cost.toFixed(2)}</span>
+      </div>`).join('')}
+    </div>`:'';
   const pedidoFieldsHTML=isPedido?`<div class="task-pedido-fields">
-    <div class="task-pedido-row">
+    ${filamentInfoHTML}
+    <div class="task-pedido-row" style="margin-top:${task.filamentLines&&task.filamentLines.length>0?'6px':'0'};">
       <span class="task-pedido-label">💰 Valor pago</span>
       <input class="task-pedido-inp valor" type="number" min="0" step="0.01" placeholder="R$ 0,00" data-pedfield="valorPago" data-taskid="${task.id}" data-tabid="${tabId}" value="${esc(task.valorPago||'')}">
     </div>
@@ -1026,13 +1037,16 @@ function openTransferModal(){
     const pedidosTab=state.tabs.find(t=>t.id==='pedidos');
     if(!pedidosTab){alert('Aba Pedidos não encontrada.');return;}
     if(!pedidosTab.tasks) pedidosTab.tasks=[];
-    const subtasks=lastCalcResult.validLines.map(l=>({id:uid(),text:`${l.fil.name} — ${l.grams}g (R$ ${l.cost.toFixed(2)})`,done:false,_renaming:false}));
+    const filamentLines=lastCalcResult.validLines.map(l=>({
+      name:l.fil.name, color:l.fil.color, grams:l.grams, cost:parseFloat(l.cost.toFixed(2))
+    }));
     pedidosTab.tasks.push({
       id:uid(), text:name, done:false, tag:'pedidos',
       valorPago:lastCalcResult.pfF.toFixed(2),
       gramasGastas:lastCalcResult.totalGrams.toFixed(0),
       custoPorGrama:lastCalcResult.avgCostPerGrama,
-      subtasks, _subOpen:true, _renaming:false
+      filamentLines,
+      subtasks:[], _subOpen:false, _renaming:false
     });
     save(); modal.remove(); navTo('pedidos');
   });
