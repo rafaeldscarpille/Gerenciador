@@ -906,6 +906,14 @@ function buildPedidosHTML(){
         <input type="text" id="newPedidoCliente" placeholder="Nome do cliente..." autocomplete="off"
           style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-size:14px;font-family:'Syne',sans-serif;outline:none;transition:border-color 0.15s;"
           onfocus="this.style.borderColor='var(--accent5)'" onblur="this.style.borderColor='var(--border)'">
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <div style="position:relative;flex:1;">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--text3);font-family:'DM Mono',monospace;pointer-events:none;">R$</span>
+          <input type="number" id="newPedidoValor" placeholder="0,00" min="0" step="0.01" autocomplete="off"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px 10px 30px;color:var(--accent);font-size:14px;font-family:'DM Mono',monospace;outline:none;transition:border-color 0.15s;"
+            onfocus="this.style.borderColor='var(--accent)'" onblur="this.style.borderColor='var(--border)'">
+        </div>
         <button class="btn" id="addPedidoBtn" style="background:var(--accent5);color:#fff;padding:10px 20px;">+ Pedido</button>
       </div>
     </div>
@@ -922,22 +930,26 @@ function bindPedidosEvents(){
   if(!tab.tasks) tab.tasks=[];
 
   const inpCliente=document.getElementById('newPedidoCliente');
+  const inpValor=document.getElementById('newPedidoValor');
   function addPedido(){
     if(!inp||!inp.value.trim()) return;
     tab.tasks.push({
       id:uid(), text:inp.value.trim(), done:false, tag:'pedidos',
       cliente:(inpCliente?.value||'').trim(),
-      valorPago:'', gramasGastas:'', custoPorGrama:0,
+      valorPago:(inpValor?.value||'').trim(),
+      gramasGastas:'', custoPorGrama:0,
       filamentLines:[], subtasks:[], _subOpen:false, _renaming:false
     });
     inp.value='';
     if(inpCliente) inpCliente.value='';
+    if(inpValor) inpValor.value='';
     save(); render();
     setTimeout(()=>document.getElementById('newPedido')?.focus(),40);
   }
   if(btn) btn.addEventListener('click',addPedido);
   if(inp) inp.addEventListener('keydown',e=>{if(e.key==='Enter'){if(inpCliente&&!inpCliente.value.trim())inpCliente.focus();else addPedido();}});
-  if(inpCliente) inpCliente.addEventListener('keydown',e=>{if(e.key==='Enter')addPedido();});
+  if(inpCliente) inpCliente.addEventListener('keydown',e=>{if(e.key==='Enter'){if(inpValor&&!inpValor.value.trim())inpValor.focus();else addPedido();}});
+  if(inpValor) inpValor.addEventListener('keydown',e=>{if(e.key==='Enter')addPedido();});
   // reuse list events bound to tabId='pedidos'
   bindListEvents('pedidos');
 }
@@ -1038,12 +1050,16 @@ function openTransferModal(){
     <div class="modal-title">📦 Enviar para Pedidos</div>
     <div class="field"><label>Nome do projeto</label><input type="text" id="transferName" placeholder="ex: Suporte para notebook" autocomplete="off"></div>
     <div class="field"><label>Nome do cliente</label><input type="text" id="transferCliente" placeholder="ex: João Silva" autocomplete="off"></div>
-    <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);line-height:2;margin-bottom:4px;">
+    <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);line-height:2;margin-bottom:10px;">
       ${lastCalcResult.validLines.map(l=>`<div style="display:flex;align-items:center;gap:7px;"><div style="width:8px;height:8px;border-radius:50%;background:${l.fil.color};flex-shrink:0;border:1px solid rgba(255,255,255,0.15);"></div><span style="flex:1;color:var(--text2);">${esc(l.fil.name)}</span><span>${l.grams}g</span><span style="color:var(--text);width:80px;text-align:right;">R$ ${l.cost.toFixed(2)}</span></div>`).join('')}
       <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;display:flex;justify-content:space-between;">
         <span style="color:var(--text3);">${lastCalcResult.totalGrams.toFixed(0)}g · custo R$ ${lastCalcResult.totalCost.toFixed(2)}</span>
-        <span style="color:var(--accent);font-weight:700;">Sugerido R$ ${lastCalcResult.pfF.toFixed(2)}</span>
+        <span style="color:var(--accent2);">Sugerido PF: R$ ${lastCalcResult.pfF.toFixed(2)}</span>
       </div>
+    </div>
+    <div class="field"><label>💰 Valor pago pelo cliente (R$)</label>
+      <input type="number" id="transferValor" placeholder="${lastCalcResult.pfF.toFixed(2)}" min="0" step="0.01" value="${lastCalcResult.pfF.toFixed(2)}"
+        style="border-color:rgba(200,240,96,0.4);color:var(--accent);">
     </div>
     <div class="modal-actions">
       <button class="btn" id="transferConfirm" style="flex:1">Confirmar pedido</button>
@@ -1056,6 +1072,7 @@ function openTransferModal(){
   document.getElementById('transferConfirm').addEventListener('click',()=>{
     const name=document.getElementById('transferName').value.trim();
     const cliente=(document.getElementById('transferCliente')?.value||'').trim();
+    const valorFinal=(document.getElementById('transferValor')?.value||lastCalcResult.pfF.toFixed(2)).trim();
     if(!name){document.getElementById('transferName').focus();return;}
     const pedidosTab=state.tabs.find(t=>t.id==='pedidos');
     if(!pedidosTab){alert('Aba Pedidos não encontrada.');return;}
@@ -1066,7 +1083,7 @@ function openTransferModal(){
     pedidosTab.tasks.push({
       id:uid(), text:name, done:false, tag:'pedidos',
       cliente,
-      valorPago:lastCalcResult.pfF.toFixed(2),
+      valorPago:valorFinal,
       gramasGastas:lastCalcResult.totalGrams.toFixed(0),
       custoPorGrama:lastCalcResult.avgCostPerGrama,
       filamentLines,
