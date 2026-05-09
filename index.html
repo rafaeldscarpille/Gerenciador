@@ -635,17 +635,35 @@ function bindHistEvents(){
 
 // ── Vendas ──
 let vendasPeriod=6; // months
+function calcEntryCusto(h){
+  // Use custoPorGrama if available (set when created from orçamento)
+  // Otherwise estimate from filaments: average cost/g across all registered filaments
+  const g=parseFloat(h.gramasGastas)||0;
+  if(g===0) return 0;
+  if(h.custoPorGrama&&h.custoPorGrama>0) return g*h.custoPorGrama;
+  // fallback: average of all registered filament costs
+  if(state.filaments.length===0) return 0;
+  const avgPricePerKg=state.filaments.reduce((s,f)=>s+f.price,0)/state.filaments.length;
+  return g*(avgPricePerKg/1000);
+}
+
 function getVendasData(months){
   const now=new Date();const labels=[];const pedidos=[];const receita=[];const custoArr=[];const lucroArr=[];
   for(let i=months-1;i>=0;i--){
     const d=new Date(now.getFullYear(),now.getMonth()-i,1);
     const label=d.toLocaleDateString('pt-BR',{month:'short',year:'2-digit'});
     labels.push(label);
-    const monthEntries=state.history.filter(h=>{const hd=new Date(h.completedAt);return hd.getFullYear()===d.getFullYear()&&hd.getMonth()===d.getMonth()&&h.tag==='pedidos';});
+    const monthEntries=state.history.filter(h=>{
+      const hd=new Date(h.completedAt);
+      return hd.getFullYear()===d.getFullYear()&&hd.getMonth()===d.getMonth()&&h.tag==='pedidos';
+    });
     pedidos.push(monthEntries.length);
     const r=monthEntries.reduce((s,h)=>s+(parseFloat(h.valorPago)||0),0);
-    const c=monthEntries.reduce((s,h)=>{const g=parseFloat(h.gramasGastas)||0;const cg=h.custoPorGrama||0;return s+g*cg;},0);
-    receita.push(parseFloat(r.toFixed(2)));custoArr.push(parseFloat(c.toFixed(2)));lucroArr.push(parseFloat((r-c).toFixed(2)));
+    // Use proper custo calculation per entry
+    const c=monthEntries.reduce((s,h)=>s+calcEntryCusto(h),0);
+    receita.push(parseFloat(r.toFixed(2)));
+    custoArr.push(parseFloat(c.toFixed(2)));
+    lucroArr.push(parseFloat((r-c).toFixed(2)));
   }
   return{labels,pedidos,receita,custo:custoArr,lucro:lucroArr};
 }
@@ -656,7 +674,7 @@ function buildVendasHTML(){
       <button class="period-btn${vendasPeriod===6?' active':''}" data-period="6">6 meses</button>
       <button class="period-btn${vendasPeriod===12?' active':''}" data-period="12">12 meses</button>
     </div>
-    <div class="stats-grid" id="statsGrid"></div>
+    <div class="stats-grid" id="statsGrid" style="grid-template-columns:repeat(2,1fr);"></div>
     <div class="chart-card"><div class="chart-title">Receita vs Custo de filamento (R$)</div><div class="chart-wrap"><canvas id="chartReceita"></canvas></div></div>
     <div class="chart-card"><div class="chart-title">Quantidade de pedidos por mês</div><div class="chart-wrap"><canvas id="chartPedidos"></canvas></div></div>
     <div class="chart-card"><div class="chart-title">Lucro estimado (R$)</div><div class="chart-wrap"><canvas id="chartLucro"></canvas></div></div>`;
@@ -666,26 +684,154 @@ function bindVendasEvents(){
     btn.addEventListener('click',()=>{vendasPeriod=parseInt(btn.dataset.period);renderMain();});
   });
   const data=getVendasData(vendasPeriod);
-  // Stats
   const totalPed=data.pedidos.reduce((a,b)=>a+b,0);
   const totalRec=data.receita.reduce((a,b)=>a+b,0);
   const totalCusto=data.custo.reduce((a,b)=>a+b,0);
   const totalLucro=data.lucro.reduce((a,b)=>a+b,0);
+  const margemMedia=totalRec>0?((totalLucro/totalRec)*100).toFixed(1):0;
+
   document.getElementById('statsGrid').innerHTML=`
-    <div class="stat-card"><div class="stat-label">Pedidos concluídos</div><div class="stat-val orange">${totalPed}</div></div>
+    <div class="stat-card"><div class="stat-label">Pedidos no período</div><div class="stat-val orange">${totalPed}</div></div>
     <div class="stat-card"><div class="stat-label">Receita total</div><div class="stat-val green">${fmtR(totalRec)}</div></div>
     <div class="stat-card"><div class="stat-label">Custo filamento</div><div class="stat-val blue">${fmtR(totalCusto)}</div></div>
-    <div class="stat-card"><div class="stat-label">Lucro estimado</div><div class="stat-val purple">${fmtR(totalLucro)}</div></div>`;
-  const chartDefaults={responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#9a99a8',font:{size:11}}},tooltip:{backgroundColor:'#222228',titleColor:'#f0efe8',bodyColor:'#9a99a8',borderColor:'#2e2e38',borderWidth:1}},scales:{x:{ticks:{color:'#5c5b6e',font:{size:10}},grid:{color:'#2e2e38'}},y:{ticks:{color:'#5c5b6e',font:{size:10}},grid:{color:'#2e2e38'},beginAtZero:true}}};
-  // Chart 1: Receita vs Custo
+    <div class="stat-card"><div class="stat-label">Lucro líquido</div><div class="stat-val purple">${fmtR(totalLucro)}</div></div>
+    <div class="stat-card" style="grid-column:1/-1"><div class="stat-label">Margem média de lucro</div><div class="stat-val" style="color:${totalLucro>=0?'var(--accent)':'var(--accent3)'};font-size:24px;">${margemMedia}%</div></div>`;
+
+  const tooltipFmt={callbacks:{label:ctx=>{
+    const ds=ctx.dataset.label;const v=ctx.parsed.y;
+    return ` ${ds}: R$ ${v.toFixed(2)}`;
+  }}};
+  const chartDefaults={
+    responsive:true,maintainAspectRatio:false,
+    plugins:{
+      legend:{labels:{color:'#9a99a8',font:{size:11},boxWidth:12}},
+      tooltip:{backgroundColor:'#222228',titleColor:'#f0efe8',bodyColor:'#9a99a8',borderColor:'#3d3d4d',borderWidth:1,...tooltipFmt}
+    },
+    scales:{
+      x:{ticks:{color:'#5c5b6e',font:{size:10}},grid:{color:'rgba(46,46,56,0.8)'}},
+      y:{ticks:{color:'#5c5b6e',font:{size:10},callback:v=>'R$ '+v.toFixed(0)},grid:{color:'rgba(46,46,56,0.8)'},beginAtZero:true}
+    }
+  };
+
+  // Chart 1: Receita vs Custo de filamento — stacked to show lucro visually
   const ctx1=document.getElementById('chartReceita').getContext('2d');
-  chartInstances.receita=new Chart(ctx1,{type:'bar',data:{labels:data.labels,datasets:[{label:'Receita (R$)',data:data.receita,backgroundColor:'rgba(200,240,96,0.25)',borderColor:'#c8f060',borderWidth:1.5,borderRadius:4},{label:'Custo filamento (R$)',data:data.custo,backgroundColor:'rgba(96,212,240,0.2)',borderColor:'#60d4f0',borderWidth:1.5,borderRadius:4}]},options:{...chartDefaults}});
-  // Chart 2: Pedidos
+  chartInstances.receita=new Chart(ctx1,{
+    type:'bar',
+    data:{
+      labels:data.labels,
+      datasets:[
+        {
+          label:'Custo filamento (R$)',
+          data:data.custo,
+          backgroundColor:'rgba(96,212,240,0.45)',
+          borderColor:'#60d4f0',
+          borderWidth:1.5,
+          borderRadius:4,
+          stack:'stack'
+        },
+        {
+          label:'Lucro (R$)',
+          data:data.lucro.map(v=>Math.max(0,v)),
+          backgroundColor:'rgba(200,240,96,0.45)',
+          borderColor:'#c8f060',
+          borderWidth:1.5,
+          borderRadius:4,
+          stack:'stack'
+        }
+      ]
+    },
+    options:{
+      ...chartDefaults,
+      plugins:{
+        ...chartDefaults.plugins,
+        tooltip:{
+          ...chartDefaults.plugins.tooltip,
+          callbacks:{
+            afterBody:(items)=>{
+              const idx=items[0].dataIndex;
+              const rec=data.receita[idx];
+              const custo=data.custo[idx];
+              const luc=data.lucro[idx];
+              const margem=rec>0?((luc/rec)*100).toFixed(1):0;
+              return [`──────────────`,` Receita total: R$ ${rec.toFixed(2)}`,` Margem: ${margem}%`];
+            }
+          }
+        }
+      },
+      scales:{
+        ...chartDefaults.scales,
+        x:{...chartDefaults.scales.x,stacked:true},
+        y:{...chartDefaults.scales.y,stacked:true}
+      }
+    }
+  });
+
+  // Chart 2: Quantidade de pedidos
   const ctx2=document.getElementById('chartPedidos').getContext('2d');
-  chartInstances.pedidos=new Chart(ctx2,{type:'bar',data:{labels:data.labels,datasets:[{label:'Pedidos',data:data.pedidos,backgroundColor:'rgba(240,160,96,0.25)',borderColor:'#f0a060',borderWidth:1.5,borderRadius:4}]},options:{...chartDefaults,scales:{...chartDefaults.scales,y:{...chartDefaults.scales.y,ticks:{...chartDefaults.scales.y.ticks,stepSize:1}}}}});
-  // Chart 3: Lucro
+  chartInstances.pedidos=new Chart(ctx2,{
+    type:'bar',
+    data:{
+      labels:data.labels,
+      datasets:[{
+        label:'Pedidos concluídos',
+        data:data.pedidos,
+        backgroundColor:'rgba(240,160,96,0.35)',
+        borderColor:'#f0a060',
+        borderWidth:1.5,
+        borderRadius:4
+      }]
+    },
+    options:{
+      ...chartDefaults,
+      plugins:{...chartDefaults.plugins,tooltip:{...chartDefaults.plugins.tooltip,callbacks:{label:ctx=>` ${ctx.dataset.label}: ${ctx.parsed.y} pedido${ctx.parsed.y!==1?'s':''}`}}},
+      scales:{...chartDefaults.scales,y:{...chartDefaults.scales.y,ticks:{color:'#5c5b6e',font:{size:10},stepSize:1,callback:v=>Number.isInteger(v)?v:''},beginAtZero:true}}
+    }
+  });
+
+  // Chart 3: Lucro líquido linha com área
   const ctx3=document.getElementById('chartLucro').getContext('2d');
-  chartInstances.lucro=new Chart(ctx3,{type:'line',data:{labels:data.labels,datasets:[{label:'Lucro (R$)',data:data.lucro,borderColor:'#a060f0',backgroundColor:'rgba(160,96,240,0.1)',borderWidth:2,pointBackgroundColor:'#a060f0',pointRadius:4,tension:0.3,fill:true}]},options:{...chartDefaults}});
+  chartInstances.lucro=new Chart(ctx3,{
+    type:'line',
+    data:{
+      labels:data.labels,
+      datasets:[
+        {
+          label:'Receita (R$)',
+          data:data.receita,
+          borderColor:'rgba(200,240,96,0.6)',
+          backgroundColor:'transparent',
+          borderWidth:1.5,
+          borderDash:[4,3],
+          pointRadius:3,
+          pointBackgroundColor:'#c8f060',
+          tension:0.3
+        },
+        {
+          label:'Custo filamento (R$)',
+          data:data.custo,
+          borderColor:'rgba(96,212,240,0.6)',
+          backgroundColor:'transparent',
+          borderWidth:1.5,
+          borderDash:[4,3],
+          pointRadius:3,
+          pointBackgroundColor:'#60d4f0',
+          tension:0.3
+        },
+        {
+          label:'Lucro líquido (R$)',
+          data:data.lucro,
+          borderColor:'#a060f0',
+          backgroundColor:'rgba(160,96,240,0.12)',
+          borderWidth:2.5,
+          pointRadius:4,
+          pointBackgroundColor:'#a060f0',
+          tension:0.3,
+          fill:true
+        }
+      ]
+    },
+    options:{...chartDefaults}
+  });
 }
 
 // ── Filamentos ──
