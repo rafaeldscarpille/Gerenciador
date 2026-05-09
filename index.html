@@ -288,6 +288,7 @@ let state = {
   tabs:[
     {id:'historico',name:'Histórico',fixed:true,icon:'🗂️'},
     {id:'vendas',name:'Vendas',fixed:true,icon:'📊'},
+    {id:'pedidos',name:'Pedidos',fixed:true,icon:'📦',tasks:[]},
     {id:'orcamentos',name:'Orçamentos',fixed:true,icon:'🧮'},
     {id:'filamentos',name:'Filamentos',fixed:true,icon:'🎨'},
     {id:'tab1',name:'Minhas Tarefas',fixed:false,icon:'✅',tasks:[]}
@@ -322,11 +323,16 @@ function migrate(s){
   const fixedDefs=[
     {id:'historico',name:'Histórico',fixed:true,icon:'🗂️'},
     {id:'vendas',name:'Vendas',fixed:true,icon:'📊'},
+    {id:'pedidos',name:'Pedidos',fixed:true,icon:'📦',tasks:[]},
     {id:'orcamentos',name:'Orçamentos',fixed:true,icon:'🧮'},
     {id:'filamentos',name:'Filamentos',fixed:true,icon:'🎨'},
   ];
   if(!s.tabs) s.tabs=[];
-  fixedDefs.forEach(def=>{if(!s.tabs.find(t=>t.id===def.id)) s.tabs.unshift(def);});
+  fixedDefs.forEach(def=>{
+    const existing=s.tabs.find(t=>t.id===def.id);
+    if(!existing){ s.tabs.splice(fixedDefs.indexOf(def),0,def); }
+    else if(def.tasks&&!existing.tasks){ existing.tasks=[]; }
+  });
   s.tabs.forEach(tab=>{
     if(tab.tasks) tab.tasks.forEach(t=>{
       if(!t.subtasks) t.subtasks=[];
@@ -445,6 +451,7 @@ function renderMain(){
   if(tabId==='historico'){main.innerHTML=buildHistHTML();bindHistEvents();return;}
   if(tabId==='vendas'){main.innerHTML=buildVendasHTML();bindVendasEvents();return;}
   if(tabId==='orcamentos'){main.innerHTML=buildOrcHTML();bindOrcEvents();return;}
+  if(tabId==='pedidos'){main.innerHTML=buildPedidosHTML();bindPedidosEvents();return;}
   if(tabId==='filamentos'){main.innerHTML=buildFilamentosHTML();bindFilamentosEvents();return;}
   const tab=state.tabs.find(t=>t.id===tabId);
   if(tab){main.innerHTML=buildListHTML(tab);bindListEvents(tab.id);}
@@ -570,7 +577,21 @@ function bindListEvents(tabId){
       dropdown.querySelectorAll('[data-tagset]').forEach(opt=>{
         opt.addEventListener('click',ev=>{
           ev.stopPropagation();const tab2=state.tabs.find(t=>t.id===opt.dataset.tabid);const task2=tab2?.tasks.find(t=>t.id===opt.dataset.taskid);
-          if(task2){task2.tag=opt.dataset.tagset;if(!HIST_TAGS.includes(task2.tag)){task2.valorPago='';task2.gramasGastas='';}save();render();}dropdown.remove();
+          if(task2){
+            const prevTag=task2.tag;
+            task2.tag=opt.dataset.tagset;
+            if(!HIST_TAGS.includes(task2.tag)){task2.valorPago='';task2.gramasGastas='';}
+            // if tag set to pedidos and task not already in pedidos tab, move it
+            if(task2.tag==='pedidos'&&opt.dataset.tabid!=='pedidos'){
+              const pedidosTab=state.tabs.find(t=>t.id==='pedidos');
+              if(pedidosTab){
+                pedidosTab.tasks=pedidosTab.tasks||[];
+                pedidosTab.tasks.push(task2);
+                if(tab2) tab2.tasks=(tab2.tasks||[]).filter(t=>t.id!==task2.id);
+              }
+            }
+            save();render();
+          }dropdown.remove();
         });
       });
       setTimeout(()=>document.addEventListener('click',()=>dropdown.remove(),{once:true}),0);
@@ -834,6 +855,47 @@ function bindVendasEvents(){
   });
 }
 
+// ── Pedidos ──
+function buildPedidosHTML(){
+  const tab=state.tabs.find(t=>t.id==='pedidos');
+  if(!tab) return '';
+  if(!tab.tasks) tab.tasks=[];
+  const pending=tab.tasks.filter(t=>!t.done).length;
+  const total=tab.tasks.length;
+  const items=tab.tasks.map(task=>buildTaskHTML(task,'pedidos')).join('');
+  return `<div class="page-title">📦 Pedidos${total>0?`<span class="badge">${pending} em aberto</span>`:''}</div>
+    <div style="display:flex;gap:8px;margin-bottom:14px;">
+      <input type="text" id="newPedido" placeholder="Novo pedido / projeto..." autocomplete="off" style="flex:1;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 13px;color:var(--text);font-size:15px;font-family:'Syne',sans-serif;outline:none;" onfocus="this.style.borderColor='var(--accent5)'" onblur="this.style.borderColor='var(--border)'">
+      <button class="btn" id="addPedidoBtn" style="background:var(--accent5);color:#fff;">+</button>
+    </div>
+    <div class="task-list" id="pedidosList">
+      ${items||'<div class="empty">Nenhum pedido em aberto.<br>Crie um manualmente ou transfira um orçamento.</div>'}
+    </div>`;
+}
+
+function bindPedidosEvents(){
+  const inp=document.getElementById('newPedido');
+  const btn=document.getElementById('addPedidoBtn');
+  const tab=state.tabs.find(t=>t.id==='pedidos');
+  if(!tab) return;
+  if(!tab.tasks) tab.tasks=[];
+
+  function addPedido(){
+    if(!inp||!inp.value.trim()) return;
+    tab.tasks.push({
+      id:uid(), text:inp.value.trim(), done:false, tag:'pedidos',
+      valorPago:'', gramasGastas:'', custoPorGrama:0,
+      subtasks:[], _subOpen:false, _renaming:false
+    });
+    inp.value=''; save(); render();
+    setTimeout(()=>document.getElementById('newPedido')?.focus(),40);
+  }
+  if(btn) btn.addEventListener('click',addPedido);
+  if(inp) inp.addEventListener('keydown',e=>{if(e.key==='Enter')addPedido();});
+  // reuse list events bound to tabId='pedidos'
+  bindListEvents('pedidos');
+}
+
 // ── Filamentos ──
 function buildFilamentosHTML(){
   const filItems=state.filaments.map(f=>`<div class="fil-item"><div class="fil-dot" style="background:${f.color}"></div><span class="fil-name">${esc(f.name)}</span><span class="fil-price">R$ ${f.price.toFixed(2)}/kg</span><span class="fil-del" data-filid="${f.id}">remover</span></div>`).join('')||'<div style="font-size:12px;color:var(--text3);font-family:\'DM Mono\',monospace;padding:8px 0">Nenhum filamento cadastrado.</div>';
@@ -924,22 +986,20 @@ function calcOrc(){
 // ── Transfer to Pedido ──
 function openTransferModal(){
   if(!lastCalcResult){alert('Calcule primeiro.');return;}
-  // pick first user list tab
-  const listTabs=state.tabs.filter(t=>!t.fixed&&t.tasks);
-  const tabOpts=listTabs.map(t=>`<option value="${t.id}">${esc(t.name)}</option>`).join('')||'<option value="">Nenhuma lista disponível</option>';
   const modal=document.createElement('div');
   modal.className='modal-overlay';
   modal.innerHTML=`<div class="modal">
-    <div class="modal-title">📦 Transferir para Pedido</div>
-    <div class="field"><label>Nome do projeto</label><input type="text" id="transferName" placeholder="ex: Suporte para notebook" autocomplete="off"></div>
-    <div class="field"><label>Adicionar à lista</label><select id="transferTab">${tabOpts}</select></div>
-    <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;padding:8px 10px;background:var(--surface2);border-radius:var(--radius-sm);line-height:1.7;">
-      Total: <strong style="color:var(--text)">${lastCalcResult.totalGrams.toFixed(0)}g</strong> &nbsp;·&nbsp;
-      Custo: <strong style="color:var(--accent2)">R$ ${lastCalcResult.totalCost.toFixed(2)}</strong> &nbsp;·&nbsp;
-      PF: <strong style="color:var(--accent)">R$ ${lastCalcResult.pfF.toFixed(2)}</strong>
+    <div class="modal-title">📦 Enviar para Pedidos</div>
+    <div class="field"><label>Nome do projeto / cliente</label><input type="text" id="transferName" placeholder="ex: Suporte para notebook" autocomplete="off"></div>
+    <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);line-height:2;margin-bottom:4px;">
+      ${lastCalcResult.validLines.map(l=>`<div style="display:flex;align-items:center;gap:7px;"><div style="width:8px;height:8px;border-radius:50%;background:${l.fil.color};flex-shrink:0;border:1px solid rgba(255,255,255,0.15);"></div><span style="flex:1;color:var(--text2);">${esc(l.fil.name)}</span><span>${l.grams}g</span><span style="color:var(--text);width:80px;text-align:right;">R$ ${l.cost.toFixed(2)}</span></div>`).join('')}
+      <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;display:flex;justify-content:space-between;">
+        <span style="color:var(--text3);">${lastCalcResult.totalGrams.toFixed(0)}g · custo R$ ${lastCalcResult.totalCost.toFixed(2)}</span>
+        <span style="color:var(--accent);font-weight:700;">Sugerido R$ ${lastCalcResult.pfF.toFixed(2)}</span>
+      </div>
     </div>
     <div class="modal-actions">
-      <button class="btn" id="transferConfirm" style="flex:1">Criar pedido</button>
+      <button class="btn" id="transferConfirm" style="flex:1">Confirmar pedido</button>
       <button class="btn-ghost" id="transferCancel">Cancelar</button>
     </div>
   </div>`;
@@ -948,20 +1008,19 @@ function openTransferModal(){
   document.getElementById('transferCancel').addEventListener('click',()=>modal.remove());
   document.getElementById('transferConfirm').addEventListener('click',()=>{
     const name=document.getElementById('transferName').value.trim();
-    const tabId=document.getElementById('transferTab').value;
-    if(!name){alert('Digite o nome do projeto.');return;}
-    const tab=state.tabs.find(t=>t.id===tabId);
-    if(!tab){alert('Selecione uma lista.');return;}
-    // subtasks: one per filament line
+    if(!name){document.getElementById('transferName').focus();return;}
+    const pedidosTab=state.tabs.find(t=>t.id==='pedidos');
+    if(!pedidosTab){alert('Aba Pedidos não encontrada.');return;}
+    if(!pedidosTab.tasks) pedidosTab.tasks=[];
     const subtasks=lastCalcResult.validLines.map(l=>({id:uid(),text:`${l.fil.name} — ${l.grams}g (R$ ${l.cost.toFixed(2)})`,done:false,_renaming:false}));
-    tab.tasks.push({
+    pedidosTab.tasks.push({
       id:uid(), text:name, done:false, tag:'pedidos',
       valorPago:lastCalcResult.pfF.toFixed(2),
       gramasGastas:lastCalcResult.totalGrams.toFixed(0),
       custoPorGrama:lastCalcResult.avgCostPerGrama,
       subtasks, _subOpen:true, _renaming:false
     });
-    save(); modal.remove(); navTo(tabId);
+    save(); modal.remove(); navTo('pedidos');
   });
 }
 
