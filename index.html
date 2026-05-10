@@ -338,6 +338,8 @@ function migrate(s){
       if(!t.subtasks) t.subtasks=[];
       if(!t.filamentLines) t.filamentLines=[];
       if(t.cliente===undefined) t.cliente='';
+      if(t.dataPedido===undefined) t.dataPedido='';
+      if(t.dataEntrega===undefined) t.dataEntrega='';
       if(t._subOpen===undefined) t._subOpen=false;
       if(!t.tag) t.tag='none';
       if(t._renaming===undefined) t._renaming=false;
@@ -413,6 +415,8 @@ function addToHistory(task,tabName){
   const entry={
     id:uid(), taskText:task.text, tag:task.tag,
     cliente:task.cliente||'',
+    dataPedido:task.dataPedido||'',
+    dataEntrega:task.dataEntrega||'',
     valorPago:task.valorPago||'', gramasGastas:task.gramasGastas||'',
     custoPorGrama:task.custoPorGrama||0,
     subtasks:(task.subtasks||[]).map(s=>({text:s.text,done:s.done})),
@@ -518,21 +522,18 @@ function buildTaskHTML(task,tabId){
         <span style="color:var(--text3);">R$ ${l.cost.toFixed(2)}</span>
       </div>`).join('')}
     </div>`:'';
-  const pedidoFieldsHTML=isPedido?`<div class="task-pedido-fields">
-    ${filamentInfoHTML}
-    <div class="task-pedido-row" style="margin-top:${task.filamentLines&&task.filamentLines.length>0?'6px':'0'};">
-      <span class="task-pedido-label">👤 Cliente</span>
-      <input class="task-pedido-inp" type="text" placeholder="Nome do cliente" data-pedfield="cliente" data-taskid="${task.id}" data-tabid="${tabId}" value="${esc(task.cliente||'')}">
-    </div>
-    <div class="task-pedido-row">
-      <span class="task-pedido-label">💰 Valor pago</span>
-      <input class="task-pedido-inp valor" type="number" min="0" step="0.01" placeholder="R$ 0,00" data-pedfield="valorPago" data-taskid="${task.id}" data-tabid="${tabId}" value="${esc(task.valorPago||'')}">
-    </div>
-    <div class="task-pedido-row">
-      <span class="task-pedido-label">⚖️ Gramas usadas</span>
-      <input class="task-pedido-inp gasto" type="number" min="0" step="1" placeholder="0 g" data-pedfield="gramasGastas" data-taskid="${task.id}" data-tabid="${tabId}" value="${esc(task.gramasGastas||'')}">
-    </div>
-  </div>`:'';
+  // helper: format date BR
+  function fmtD(d){if(!d)return null;try{return new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'});}catch(e){return d;}}
+  // build pedido summary chips
+  const pedidoSummary=isPedido?[
+    task.cliente?`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(160,96,240,0.1);border:1px solid rgba(160,96,240,0.2);border-radius:6px;padding:2px 7px;font-size:10px;font-family:'DM Mono',monospace;color:var(--accent5);">👤 ${esc(task.cliente)}</span>`:'',
+    task.dataPedido?`<span style="display:inline-flex;align-items:center;gap:4px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:2px 7px;font-size:10px;font-family:'DM Mono',monospace;color:var(--text3);">📅 ${fmtD(task.dataPedido)}</span>`:'',
+    task.dataEntrega?`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(240,160,96,0.08);border:1px solid rgba(240,160,96,0.2);border-radius:6px;padding:2px 7px;font-size:10px;font-family:'DM Mono',monospace;color:var(--accent4);">🚚 ${fmtD(task.dataEntrega)}</span>`:'',
+    task.valorPago?`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(200,240,96,0.08);border:1px solid rgba(200,240,96,0.2);border-radius:6px;padding:2px 7px;font-size:10px;font-family:'DM Mono',monospace;color:var(--accent);">💰 R$ ${parseFloat(task.valorPago).toFixed(2)}</span>`:'',
+    task.gramasGastas?`<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(96,212,240,0.07);border:1px solid rgba(96,212,240,0.18);border-radius:6px;padding:2px 7px;font-size:10px;font-family:'DM Mono',monospace;color:var(--accent2);">⚖️ ${task.gramasGastas}g</span>`:''
+  ].filter(Boolean).join(''):'';
+  const pedidoSummaryHTML=isPedido&&pedidoSummary?`<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;">${pedidoSummary}${filamentInfoHTML}</div>`:isPedido&&task.filamentLines&&task.filamentLines.length>0?filamentInfoHTML:'';
+  const pedidoFieldsHTML=pedidoSummaryHTML;
   let subsHTML='';
   if(showSub){
     const subItems=subs.map((s,i)=>{
@@ -544,7 +545,8 @@ function buildTaskHTML(task,tabId){
     const addInp=task._subOpen?`<div class="sub-add-row"><input type="text" id="newSub_${task.id}" placeholder="Nova subtarefa..." autocomplete="off"><button data-addsubmit="${task.id}" data-tabid="${tabId}">+ add</button></div>`:'';
     subsHTML=`<div class="subtask-area"><div class="subtask-list">${subItems}</div>${addInp}</div>`;
   }
-  return `<div class="task-block" id="block_${task.id}"><div class="task-card${task.done?' done-card':''}${showSub?' has-sub':''}" id="card_${task.id}" style="position:relative;"><input class="task-cb" type="checkbox" ${task.done?'checked':''} data-taskid="${task.id}" data-tabid="${tabId}" style="margin-top:2px;"><div class="task-text-wrap">${textHTML}${pedidoFieldsHTML}</div><div class="task-meta">${progHTML}<button class="task-tag ${tag}" data-tagbtn="${task.id}" data-tabid="${tabId}">${TAG_LABELS[tag]}</button><div class="task-actions"><button class="tact ren" data-renbtn="${task.id}" data-tabid="${tabId}">✎</button><button class="tact sub" data-subbtn="${task.id}" data-tabid="${tabId}">↳</button><button class="tact dup" data-dupbtn="${task.id}" data-tabid="${tabId}">⧉</button><button class="tact del" data-delbtn="${task.id}" data-tabid="${tabId}">✕</button></div></div></div>${subsHTML}</div>`;
+  const pedidoEditBtn=isPedido?`<button class="tact" data-editpedido="${task.id}" data-tabid="${tabId}" title="Editar pedido" style="color:var(--accent5);">✏️</button>`:'';
+  return `<div class="task-block" id="block_${task.id}"><div class="task-card${task.done?' done-card':''}${showSub?' has-sub':''}" id="card_${task.id}" style="position:relative;"><input class="task-cb" type="checkbox" ${task.done?'checked':''} data-taskid="${task.id}" data-tabid="${tabId}" style="margin-top:2px;"><div class="task-text-wrap">${textHTML}${pedidoFieldsHTML}</div><div class="task-meta">${progHTML}<button class="task-tag ${tag}" data-tagbtn="${task.id}" data-tabid="${tabId}">${TAG_LABELS[tag]}</button><div class="task-actions">${pedidoEditBtn}<button class="tact ren" data-renbtn="${task.id}" data-tabid="${tabId}">✎</button><button class="tact sub" data-subbtn="${task.id}" data-tabid="${tabId}">↳</button><button class="tact dup" data-dupbtn="${task.id}" data-tabid="${tabId}">⧉</button><button class="tact del" data-delbtn="${task.id}" data-tabid="${tabId}">✕</button></div></div></div>${subsHTML}</div>`;
 }
 
 function bindListEvents(tabId){
@@ -564,14 +566,7 @@ function bindListEvents(tabId){
     });
   });
 
-  // Pedido fields
-  document.querySelectorAll('.task-pedido-inp').forEach(inp=>{
-    inp.addEventListener('input',()=>{
-      const tab=state.tabs.find(t=>t.id===inp.dataset.tabid);
-      const task=tab?.tasks.find(t=>t.id===inp.dataset.taskid);
-      if(task){task[inp.dataset.pedfield]=inp.value;save();}
-    });
-  });
+  // Pedido fields are now edited via modal — no inline listeners needed
 
   document.querySelectorAll('[data-delbtn]').forEach(el=>{
     el.addEventListener('click',()=>{const tab=state.tabs.find(t=>t.id===el.dataset.tabid);if(tab){tab.tasks=tab.tasks.filter(t=>t.id!==el.dataset.delbtn);save();render();}});
@@ -645,6 +640,11 @@ function bindListEvents(tabId){
     inp.focus();inp.select();
   });
   document.querySelectorAll('[data-subdel]').forEach(el=>{el.addEventListener('click',()=>{const tab=state.tabs.find(t=>t.id===el.dataset.tabid);const task=tab?.tasks.find(t=>t.id===el.dataset.taskid);if(task){task.subtasks=(task.subtasks||[]).filter(s=>s.id!==el.dataset.subdel);save();render();}});});
+
+  // Edit pedido modal
+  document.querySelectorAll('[data-editpedido]').forEach(el=>{
+    el.addEventListener('click',()=>openEditPedidoModal(el.dataset.editpedido, el.dataset.tabid));
+  });
 }
 
 function commitRename(taskId,tabId,newText){const tab=state.tabs.find(t=>t.id===tabId);const task=tab?.tasks.find(t=>t.id===taskId);if(!task) return;const t=(newText||'').trim();if(t) task.text=t;task._renaming=false;save();render();}
@@ -677,8 +677,10 @@ function buildHistSlots(entries){
     const lucro=pago-custo;
     const subHTML=entry.subtasks&&entry.subtasks.length>0?`<div class="hist-task-subs">${entry.subtasks.length} subtarefa${entry.subtasks.length>1?'s':''}: ${entry.subtasks.map(s=>esc(s.text)).join(', ')}</div>`:'';
     const clienteHTML=entry.cliente?`<div style="font-size:11px;color:var(--accent5);font-family:'DM Mono',monospace;margin-top:3px;">👤 ${esc(entry.cliente)}</div>`:'';
+    const fmtDateBR=d=>d?new Date(d+'T12:00:00').toLocaleDateString('pt-BR',{day:'2-digit',month:'2-digit',year:'2-digit'}):'';
+    const datesHTML=(entry.dataPedido||entry.dataEntrega)?`<div style="font-size:10px;font-family:'DM Mono',monospace;color:var(--text3);margin-top:3px;display:flex;gap:10px;">${entry.dataPedido?`<span>📅 ${fmtDateBR(entry.dataPedido)}</span>`:''} ${entry.dataEntrega?`<span>🚚 ${fmtDateBR(entry.dataEntrega)}</span>`:''}</div>`:'';
     const moneyHTML=(pago>0||grama>0)?`<div class="hist-money-row">${pago>0?`<div class="hist-money-item pago"><div class="hist-money-label">Valor pago</div><div class="hist-money-val">${fmtR(pago)}</div></div>`:''}${grama>0?`<div class="hist-money-item custo"><div class="hist-money-label">Gramas usadas</div><div class="hist-money-val">${grama}g</div></div>`:''}${(pago>0&&custo>0)?`<div class="hist-money-item lucro"><div class="hist-money-label">Lucro estimado</div><div class="hist-money-val">${fmtR(lucro)}</div></div>`:''}</div>`:'';
-    return `<div class="hist-slot"><div class="hist-slot-header"><span class="hist-slot-num">slot ${idx+1}</span><span class="hist-slot-date">${fmtDate(entry.completedAt)}</span><span class="hist-slot-clear" data-histclear="${entry.id}">limpar</span></div><div class="hist-card"><div class="hist-task-row"><span class="hist-check">✓</span><div class="hist-task-info"><div class="hist-task-name">${esc(entry.taskText)}</div><div style="font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;margin-top:1px;">${esc(entry.tabName)}</div>${clienteHTML}${subHTML}${moneyHTML}</div><span class="hist-task-tag ${entry.tag}">${TAG_LABELS[entry.tag]}</span></div></div></div>`;
+    return `<div class="hist-slot"><div class="hist-slot-header"><span class="hist-slot-num">slot ${idx+1}</span><span class="hist-slot-date">${fmtDate(entry.completedAt)}</span><span class="hist-slot-clear" data-histclear="${entry.id}">limpar</span></div><div class="hist-card"><div class="hist-task-row"><span class="hist-check">✓</span><div class="hist-task-info"><div class="hist-task-name">${esc(entry.taskText)}</div><div style="font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;margin-top:1px;">${esc(entry.tabName)}</div>${clienteHTML}${datesHTML}${subHTML}${moneyHTML}</div><span class="hist-task-tag ${entry.tag}">${TAG_LABELS[entry.tag]}</span></div></div></div>`;
   }).join('');
 }
 function bindHistEvents(){
@@ -907,6 +909,20 @@ function buildPedidosHTML(){
           style="flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px;color:var(--text);font-size:14px;font-family:'Syne',sans-serif;outline:none;transition:border-color 0.15s;"
           onfocus="this.style.borderColor='var(--accent5)'" onblur="this.style.borderColor='var(--border)'">
       </div>
+      <div style="display:flex;gap:8px;">
+        <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
+          <label style="font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;">📅 Data do pedido</label>
+          <input type="date" id="newPedidoData"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 12px;color:var(--text2);font-size:13px;font-family:'DM Mono',monospace;outline:none;transition:border-color 0.15s;color-scheme:dark;"
+            onfocus="this.style.borderColor='var(--accent5)'" onblur="this.style.borderColor='var(--border)'">
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;gap:3px;">
+          <label style="font-size:10px;color:var(--text3);font-family:'DM Mono',monospace;">🚚 Data de entrega</label>
+          <input type="date" id="newPedidoEntrega"
+            style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 12px;color:var(--text2);font-size:13px;font-family:'DM Mono',monospace;outline:none;transition:border-color 0.15s;color-scheme:dark;"
+            onfocus="this.style.borderColor='var(--accent5)'" onblur="this.style.borderColor='var(--border)'">
+        </div>
+      </div>
       <div style="display:flex;gap:8px;align-items:center;">
         <div style="position:relative;flex:1;">
           <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:12px;color:var(--text3);font-family:'DM Mono',monospace;pointer-events:none;">R$</span>
@@ -931,11 +947,17 @@ function bindPedidosEvents(){
 
   const inpCliente=document.getElementById('newPedidoCliente');
   const inpValor=document.getElementById('newPedidoValor');
+  const inpData=document.getElementById('newPedidoData');
+  const inpEntrega=document.getElementById('newPedidoEntrega');
+  // set today as default date
+  if(inpData&&!inpData.value) inpData.value=new Date().toISOString().split('T')[0];
   function addPedido(){
     if(!inp||!inp.value.trim()) return;
     tab.tasks.push({
       id:uid(), text:inp.value.trim(), done:false, tag:'pedidos',
       cliente:(inpCliente?.value||'').trim(),
+      dataPedido:(inpData?.value||new Date().toISOString().split('T')[0]),
+      dataEntrega:(inpEntrega?.value||''),
       valorPago:(inpValor?.value||'').trim(),
       gramasGastas:'', custoPorGrama:0,
       filamentLines:[], subtasks:[], _subOpen:false, _renaming:false
@@ -943,6 +965,8 @@ function bindPedidosEvents(){
     inp.value='';
     if(inpCliente) inpCliente.value='';
     if(inpValor) inpValor.value='';
+    if(inpData) inpData.value=new Date().toISOString().split('T')[0];
+    if(inpEntrega) inpEntrega.value='';
     save(); render();
     setTimeout(()=>document.getElementById('newPedido')?.focus(),40);
   }
@@ -1041,6 +1065,81 @@ function calcOrc(){
   result.classList.add('show');
 }
 
+// ── Edit Pedido Modal ──
+function openEditPedidoModal(taskId, tabId){
+  const tab=state.tabs.find(t=>t.id===tabId);
+  const task=tab?.tasks.find(t=>t.id===taskId);
+  if(!task) return;
+
+  const modal=document.createElement('div');
+  modal.className='modal-overlay';
+  modal.innerHTML=`<div class="modal" style="max-width:460px;">
+    <div class="modal-title" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>✏️ Editar pedido</span>
+      <span style="font-size:12px;color:var(--text3);font-family:'DM Mono',monospace;font-weight:400;">${esc(task.text)}</span>
+    </div>
+
+    <div class="field">
+      <label>📦 Nome do projeto</label>
+      <input type="text" id="ep_nome" value="${esc(task.text)}" autocomplete="off">
+    </div>
+    <div class="field">
+      <label>👤 Cliente</label>
+      <input type="text" id="ep_cliente" value="${esc(task.cliente||'')}" placeholder="Nome do cliente" autocomplete="off">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div class="field" style="margin-bottom:0;">
+        <label>📅 Data do pedido</label>
+        <input type="date" id="ep_dataPedido" value="${esc(task.dataPedido||'')}" style="color-scheme:dark;">
+      </div>
+      <div class="field" style="margin-bottom:0;margin-top:0;">
+        <label>🚚 Entregar em</label>
+        <input type="date" id="ep_dataEntrega" value="${esc(task.dataEntrega||'')}" style="color-scheme:dark;">
+      </div>
+    </div>
+    <div style="height:8px;"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div class="field" style="margin-bottom:0;">
+        <label>💰 Valor pago (R$)</label>
+        <input type="number" id="ep_valorPago" value="${esc(task.valorPago||'')}" placeholder="0,00" min="0" step="0.01" style="color:var(--accent);">
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>⚖️ Gramas usadas (g)</label>
+        <input type="number" id="ep_gramasGastas" value="${esc(task.gramasGastas||'')}" placeholder="0" min="0" step="1" style="color:var(--accent2);">
+      </div>
+    </div>
+
+    <div class="modal-actions" style="margin-top:16px;">
+      <button class="btn" id="ep_confirm" style="flex:1;">Salvar alterações</button>
+      <button class="btn-ghost" id="ep_cancel">Cancelar</button>
+    </div>
+  </div>`;
+
+  document.body.appendChild(modal);
+  setTimeout(()=>document.getElementById('ep_nome')?.focus(),40);
+
+  document.getElementById('ep_cancel').addEventListener('click',()=>modal.remove());
+
+  // save on Enter in any field
+  modal.querySelectorAll('input').forEach(inp=>{
+    inp.addEventListener('keydown',e=>{if(e.key==='Enter')document.getElementById('ep_confirm').click();if(e.key==='Escape')modal.remove();});
+  });
+
+  document.getElementById('ep_confirm').addEventListener('click',()=>{
+    const nome=document.getElementById('ep_nome').value.trim();
+    if(!nome){document.getElementById('ep_nome').focus();return;}
+    task.text=nome;
+    task.cliente=document.getElementById('ep_cliente').value.trim();
+    task.dataPedido=document.getElementById('ep_dataPedido').value;
+    task.dataEntrega=document.getElementById('ep_dataEntrega').value;
+    task.valorPago=document.getElementById('ep_valorPago').value;
+    task.gramasGastas=document.getElementById('ep_gramasGastas').value;
+    save();
+    modal.remove();
+    render();
+  });
+}
+
 // ── Transfer to Pedido ──
 function openTransferModal(){
   if(!lastCalcResult){alert('Calcule primeiro.');return;}
@@ -1050,6 +1149,16 @@ function openTransferModal(){
     <div class="modal-title">📦 Enviar para Pedidos</div>
     <div class="field"><label>Nome do projeto</label><input type="text" id="transferName" placeholder="ex: Suporte para notebook" autocomplete="off"></div>
     <div class="field"><label>Nome do cliente</label><input type="text" id="transferCliente" placeholder="ex: João Silva" autocomplete="off"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      <div class="field" style="margin-bottom:0;">
+        <label>📅 Data do pedido</label>
+        <input type="date" id="transferData" style="color-scheme:dark;">
+      </div>
+      <div class="field" style="margin-bottom:0;">
+        <label>🚚 Entregar em</label>
+        <input type="date" id="transferEntrega" style="color-scheme:dark;">
+      </div>
+    </div>
     <div style="font-size:11px;color:var(--text3);font-family:'DM Mono',monospace;padding:10px 12px;background:var(--surface2);border-radius:var(--radius-sm);line-height:2;margin-bottom:10px;">
       ${lastCalcResult.validLines.map(l=>`<div style="display:flex;align-items:center;gap:7px;"><div style="width:8px;height:8px;border-radius:50%;background:${l.fil.color};flex-shrink:0;border:1px solid rgba(255,255,255,0.15);"></div><span style="flex:1;color:var(--text2);">${esc(l.fil.name)}</span><span>${l.grams}g</span><span style="color:var(--text);width:80px;text-align:right;">R$ ${l.cost.toFixed(2)}</span></div>`).join('')}
       <div style="border-top:1px solid var(--border);margin-top:6px;padding-top:6px;display:flex;justify-content:space-between;">
@@ -1067,12 +1176,18 @@ function openTransferModal(){
     </div>
   </div>`;
   document.body.appendChild(modal);
-  setTimeout(()=>document.getElementById('transferName')?.focus(),50);
+  setTimeout(()=>{
+    document.getElementById('transferName')?.focus();
+    const td=document.getElementById('transferData');
+    if(td) td.value=new Date().toISOString().split('T')[0];
+  },50);
   document.getElementById('transferCancel').addEventListener('click',()=>modal.remove());
   document.getElementById('transferConfirm').addEventListener('click',()=>{
     const name=document.getElementById('transferName').value.trim();
     const cliente=(document.getElementById('transferCliente')?.value||'').trim();
     const valorFinal=(document.getElementById('transferValor')?.value||lastCalcResult.pfF.toFixed(2)).trim();
+    const dataPedido=document.getElementById('transferData')?.value||new Date().toISOString().split('T')[0];
+    const dataEntrega=document.getElementById('transferEntrega')?.value||'';
     if(!name){document.getElementById('transferName').focus();return;}
     const pedidosTab=state.tabs.find(t=>t.id==='pedidos');
     if(!pedidosTab){alert('Aba Pedidos não encontrada.');return;}
@@ -1083,6 +1198,8 @@ function openTransferModal(){
     pedidosTab.tasks.push({
       id:uid(), text:name, done:false, tag:'pedidos',
       cliente,
+      dataPedido,
+      dataEntrega,
       valorPago:valorFinal,
       gramasGastas:lastCalcResult.totalGrams.toFixed(0),
       custoPorGrama:lastCalcResult.avgCostPerGrama,
