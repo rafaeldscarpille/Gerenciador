@@ -1,0 +1,1577 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Gestão Financeira — Igreja</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<!-- Firebase SDK v9 compat (UMD) -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html,body,#root{height:100%}
+body{font-family:'Segoe UI',system-ui,sans-serif;transition:background .25s,color .25s}
+input,select,button,textarea{font-family:inherit}
+input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+::-webkit-scrollbar{width:6px;height:6px}
+::-webkit-scrollbar-thumb{border-radius:3px}
+@keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes toastIn{from{opacity:0;transform:translateX(60px)}to{opacity:1;transform:none}}
+@keyframes spin{to{transform:rotate(360deg)}}
+.page{animation:fadeIn .25s ease}.toast{animation:toastIn .3s ease}
+table{border-collapse:collapse;width:100%}th,td{text-align:left}
+
+/* ── LIGHT THEME ── */
+body.light{
+  --bg-app:#f1f5f9;
+  --bg-main:#f1f5f9;
+  --bg-card:#ffffff;
+  --bg-card2:#f8fafc;
+  --bg-card3:#f1f5f9;
+  --bg-sidebar:#0f172a;
+  --bg-sidebar-hover:#1e40af;
+  --bg-sidebar-item:transparent;
+  --bg-input:#ffffff;
+  --bg-table-odd:#ffffff;
+  --bg-table-even:#fafafa;
+  --bg-table-head:#f8fafc;
+  --border:#e2e8f0;
+  --border-input:#e5e7eb;
+  --text-primary:#0f172a;
+  --text-secondary:#374151;
+  --text-muted:#64748b;
+  --text-hint:#94a3b8;
+  --shadow:0 1px 4px rgba(0,0,0,.06);
+  --shadow-card:0 4px 24px rgba(0,0,0,.08);
+  --scrollbar:#cbd5e1;
+}
+
+/* ── DARK THEME ── */
+body.dark{
+  --bg-app:#0b1120;
+  --bg-main:#0b1120;
+  --bg-card:#131d30;
+  --bg-card2:#1a2540;
+  --bg-card3:#0f172a;
+  --bg-sidebar:#070e1a;
+  --bg-sidebar-hover:#1e3a8a;
+  --bg-sidebar-item:transparent;
+  --bg-input:#1a2540;
+  --bg-table-odd:#131d30;
+  --bg-table-even:#111929;
+  --bg-table-head:#0f172a;
+  --border:#1e3050;
+  --border-input:#253450;
+  --text-primary:#e2e8f0;
+  --text-secondary:#cbd5e1;
+  --text-muted:#64748b;
+  --text-hint:#475569;
+  --shadow:0 1px 4px rgba(0,0,0,.3);
+  --shadow-card:0 4px 24px rgba(0,0,0,.4);
+  --scrollbar:#1e3050;
+}
+
+body{background:var(--bg-app);color:var(--text-primary)}
+::-webkit-scrollbar-thumb{background:var(--scrollbar)}
+</style>
+</head>
+<body>
+<script>
+// Aplica o tema antes do React renderizar para evitar flash
+(function(){var t=localStorage.getItem("theme");document.body.className=t==="light"?"light":"dark"})();
+</script>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useRef,useCallback,useMemo}=React;
+
+// ════════════════════════════════════════════════════════════════
+//  FIREBASE LAYER
+//  Todas as operações de banco passam por aqui.
+//  Se não houver config válida, usa localStorage como fallback.
+// ════════════════════════════════════════════════════════════════
+// ── Credenciais Firebase embutidas ───────────────────────────────
+const FIREBASE_CONFIG={
+  apiKey:"AIzaSyDzid4R1lFjWaYBGMAJIGb2aDHAzP5acxE",
+  authDomain:"churchfinancesystem.firebaseapp.com",
+  projectId:"churchfinancesystem",
+  storageBucket:"churchfinancesystem.firebasestorage.app",
+  messagingSenderId:"676835789806",
+  appId:"1:676835789806:web:63b6c6aa5b4a2f91fc5cff"
+};
+
+let _db=null; // Firestore instance
+
+function getFirestoreConfig(){ return FIREBASE_CONFIG; }
+function saveFirestoreConfig(cfg){}
+function clearFirestoreConfig(){
+  if(firebase.apps.length) firebase.app().delete().catch(()=>{});
+  _db=null;
+}
+
+async function initFirebase(cfg){
+  try{
+    // Delete existing app if any to allow re-init
+    if(firebase.apps.length) await firebase.app().delete().catch(()=>{});
+    firebase.initializeApp(cfg);
+    _db=firebase.firestore();
+    // Quick connectivity test
+    await _db.collection("_ping").doc("test").set({ts:new Date().toISOString()},{merge:true});
+    return{ok:true};
+  }catch(e){
+    _db=null;
+    return{ok:false,error:e.message};
+  }
+}
+
+// ── Firestore CRUD helpers ────────────────────────────────────────
+const COL={
+  users:"usuarios",
+  income:"entradas",
+  expenses:"custos",
+  logs:"logs"
+};
+
+async function fbGetAll(col){
+  if(!_db) return null;
+  try{
+    const snap=await _db.collection(col).orderBy("createdAt","desc").get();
+    return snap.docs.map(d=>({id:d.id,...d.data()}));
+  }catch{return null}
+}
+
+async function fbSet(col,id,data){
+  if(!_db) return false;
+  try{await _db.collection(col).doc(id).set(data,{merge:true});return true}
+  catch(e){console.error("fbSet",e);return false}
+}
+
+async function fbDelete(col,id){
+  if(!_db) return false;
+  try{await _db.collection(col).doc(id).delete();return true}
+  catch(e){console.error("fbDel",e);return false}
+}
+
+async function fbAddLog(entry){
+  if(!_db) return;
+  try{await _db.collection(COL.logs).doc(entry.id).set(entry)}
+  catch(e){console.error("fbAddLog",e)}
+}
+
+// Subscribe to a collection in real-time
+function fbSubscribe(col,orderField,callback){
+  if(!_db) return ()=>{};
+  let q=_db.collection(col);
+  if(orderField) q=q.orderBy(orderField,"desc");
+  return q.onSnapshot(snap=>{
+    const docs=snap.docs.map(d=>({id:d.id,...d.data()}));
+    callback(docs);
+  },err=>console.error("fbSubscribe",err));
+}
+
+// ════════════════════════════════════════════════════════════════
+//  LOCAL FALLBACK (localStorage)
+// ════════════════════════════════════════════════════════════════
+const INIT_LOCAL={
+  users:[{id:"admin",name:"admin",email:"admin",password:"rootadmin",
+    role:"master",active:true,perms:{},createdAt:new Date().toISOString()}],
+  income:[],expenses:[],logs:[]
+};
+function loadLocal(){
+  try{
+    const s=localStorage.getItem("igrejafin_v4");
+    if(!s) return INIT_LOCAL;
+    const p=JSON.parse(s);
+    if(!p.logs)p.logs=[];
+    if(p.income)p.income=p.income.map(i=>({...i,status:i.status||"aprovado"}));
+    return p;
+  }catch{return INIT_LOCAL}
+}
+function saveLocal(db){try{localStorage.setItem("igrejafin_v4",JSON.stringify(db))}catch{}}
+
+// ════════════════════════════════════════════════════════════════
+//  CONSTANTS
+// ════════════════════════════════════════════════════════════════
+const fmt=v=>new Intl.NumberFormat("pt-BR",{style:"currency",currency:"BRL"}).format(v);
+const fmtDate=d=>{try{return new Date(d+"T12:00:00").toLocaleDateString("pt-BR")}catch{return d}};
+const fmtDT=ts=>{try{return new Date(ts).toLocaleString("pt-BR")}catch{return ts}};
+const uid=()=>Math.random().toString(36).slice(2,10);
+const nowISO=()=>new Date().toISOString();
+const MONTHS=["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+const EXP_TYPES={fixo:"Custo Fixo",variavel:"Custo Variável",imprevisto:"Imprevisto"};
+const EXP_CLR={fixo:"#0d9488",variavel:"#7c3aed",imprevisto:"#dc2626"};
+const EXP_BG={fixo:"#ecfdf5",variavel:"#f5f3ff",imprevisto:"#fef2f2"};
+const INC_LABELS={dizimo:"Dízimo",oferta:"Oferta"};
+const DEF_CATS=["Conta de Luz","Água","Salário Pastor","Manutenção","Equipamentos",
+  "Doações Beneficentes","Imprevisto","Aluguel","Internet","Material de Limpeza","Outros"];
+const ROLE_LABEL={master:"Admin Master",gestor:"Gestor",editor:"Editor",auditor:"Auditor",agente:"Agente"};
+const ROLE_CLR={master:"#7c3aed",gestor:"#0f766e",editor:"#0d9488",auditor:"#d97706",agente:"#2563eb"};
+const ROLE_DESC={
+  master:"Acesso total ao sistema, incluindo criação e gerência de usuários.",
+  gestor:"Operações financeiras completas: criar, editar, excluir e aprovar entradas. Não cria usuários.",
+  editor:"Cria e edita conforme permissões configuradas pelo administrador.",
+  auditor:"Somente leitura de todos os dados, entradas e histórico de log.",
+  agente:"Insere entradas financeiras que aguardam aprovação do Gestor ou Admin."
+};
+const can=(user,action)=>{
+  const r=user.role;
+  if(r==="master"||r==="gestor") return true;
+  if(r==="agente"&&action==="createIncome") return true;
+  if(r==="editor") return !!user.perms?.[action];
+  return false;
+};
+
+// ════════════════════════════════════════════════════════════════
+//  SHARED UI PRIMITIVES
+// ════════════════════════════════════════════════════════════════
+const IS={width:"100%",padding:"10px 12px",border:"1.5px solid var(--border-input)",borderRadius:9,
+  fontSize:13,outline:"none",boxSizing:"border-box",background:"var(--bg-input)",color:"var(--text-primary)"};
+
+function Toast({msg,type,onClose}){
+  const bg={success:"#059669",error:"#dc2626",info:"#2563eb",warning:"#d97706"}[type]||"#059669";
+  useEffect(()=>{const t=setTimeout(onClose,4500);return()=>clearTimeout(t)},[]);
+  return(
+    <div className="toast" style={{position:"fixed",top:20,right:20,zIndex:9999,background:bg,color:"#fff",
+      padding:"12px 20px",borderRadius:10,fontSize:14,fontWeight:600,
+      boxShadow:"0 8px 24px rgba(0,0,0,.22)",display:"flex",alignItems:"center",gap:10,maxWidth:400}}>
+      <span style={{flex:1}}>{msg}</span>
+      <button onClick={onClose} style={{background:"none",border:"none",color:"#fff",cursor:"pointer",fontSize:18,lineHeight:1}}>×</button>
+    </div>
+  );
+}
+function ConfirmModal({msg,onConfirm,onCancel}){
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.45)",zIndex:9000,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{background:"var(--bg-card)",borderRadius:14,padding:"28px 32px",maxWidth:360,width:"90%",textAlign:"center",boxShadow:"0 20px 60px rgba(0,0,0,.25)"}}>
+        <div style={{fontSize:36,marginBottom:12}}>⚠️</div>
+        <p style={{fontSize:14,color:"var(--text-secondary)",marginBottom:24,lineHeight:1.6}}>{msg}</p>
+        <div style={{display:"flex",gap:10,justifyContent:"center"}}>
+          <button onClick={onCancel} style={{padding:"9px 20px",border:"1.5px solid var(--border-input)",borderRadius:8,background:"var(--bg-card)",color:"var(--text-secondary)",fontSize:13,cursor:"pointer",fontWeight:600}}>Cancelar</button>
+          <button onClick={onConfirm} style={{padding:"9px 20px",border:"none",borderRadius:8,background:"#dc2626",color:"#fff",fontSize:13,cursor:"pointer",fontWeight:600}}>Confirmar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+function Spinner({size=24,color="#1d4ed8"}){
+  return <div style={{width:size,height:size,border:`3px solid #e2e8f0`,borderTopColor:color,
+    borderRadius:"50%",animation:"spin 0.7s linear infinite",flexShrink:0}}/>;
+}
+function Pill({color,bg,children}){
+  return <span style={{padding:"4px 10px",borderRadius:8,background:bg,color,fontSize:11,fontWeight:700,border:`1px solid ${color}30`,whiteSpace:"nowrap"}}>{children}</span>;
+}
+function Btn({color,onClick,children,disabled}){
+  return <button onClick={onClick} disabled={disabled}
+    style={{padding:"10px 18px",background:disabled?"#94a3b8":color,color:"#fff",border:"none",
+      borderRadius:10,fontSize:13,fontWeight:700,cursor:disabled?"not-allowed":"pointer"}}>{children}</button>;
+}
+function SBtn({color,bg,bdr,onClick,children}){
+  return <button onClick={onClick}
+    style={{padding:"5px 11px",background:bg,border:`1px solid ${bdr}`,borderRadius:7,color,fontSize:11,fontWeight:700,cursor:"pointer"}}>{children}</button>;
+}
+function FC({title,onClose,children}){
+  return(
+    <div style={{background:"var(--bg-card)",borderRadius:14,padding:24,border:"1px solid var(--border)",marginBottom:20,
+      boxShadow:"var(--shadow-card)",animation:"fadeIn .2s ease"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+        <h3 style={{fontSize:15,fontWeight:800,color:"var(--text-primary)"}}>{title}</h3>
+        <button onClick={onClose} style={{background:"none",border:"none",fontSize:20,color:"var(--text-hint)",cursor:"pointer",lineHeight:1}}>×</button>
+      </div>
+      {children}
+    </div>
+  );
+}
+function FA({onSave,onCancel,saveColor="#059669",saveLabel="Salvar",loading}){
+  return(
+    <div style={{display:"flex",gap:10,marginTop:20,alignItems:"center"}}>
+      <button onClick={onSave} disabled={loading}
+        style={{padding:"10px 24px",background:loading?"#94a3b8":saveColor,color:"#fff",border:"none",
+          borderRadius:9,fontSize:13,fontWeight:700,cursor:loading?"not-allowed":"pointer",display:"flex",alignItems:"center",gap:8}}>
+        {loading&&<Spinner size={16} color="#fff"/>}{loading?"Salvando...":saveLabel}
+      </button>
+      <button onClick={onCancel} style={{padding:"10px 20px",background:"var(--bg-card2)",color:"var(--text-muted)",
+        border:"1px solid var(--border)",borderRadius:9,fontSize:13,fontWeight:600,cursor:"pointer"}}>Cancelar</button>
+    </div>
+  );
+}
+function PH({title,subtitle,children}){
+  return(
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24,flexWrap:"wrap",gap:12}}>
+      <div>
+        <h1 style={{fontSize:22,fontWeight:800,color:"var(--text-primary)",margin:0}}>{title}</h1>
+        {subtitle&&<p style={{fontSize:13,color:"var(--text-muted)",marginTop:4}}>{subtitle}</p>}
+      </div>
+      {children}
+    </div>
+  );
+}
+function Fld({label,children,span}){
+  return(
+    <div style={{gridColumn:span?"1 / -1":undefined}}>
+      <label style={{fontSize:12,fontWeight:700,color:"var(--text-secondary)",display:"block",marginBottom:6}}>{label}</label>
+      {children}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  FIREBASE SETUP SCREEN
+// ════════════════════════════════════════════════════════════════
+function FirebaseSetup({onConnected,onSkip}){
+  const [fields,setFields]=useState({
+    apiKey:"",authDomain:"",projectId:"",storageBucket:"",messagingSenderId:"",appId:""
+  });
+  const [raw,setRaw]=useState("");
+  const [mode,setMode]=useState("paste"); // "paste" | "fields"
+  const [loading,setLoading]=useState(false);
+  const [err,setErr]=useState("");
+
+  const setF=(k,v)=>setFields(f=>({...f,[k]:v}));
+
+  const parseRaw=()=>{
+    try{
+      // Try to extract firebaseConfig object from pasted text
+      const match=raw.match(/firebaseConfig\s*=\s*(\{[\s\S]*?\})/);
+      const jsonStr=match?match[1]:raw;
+      const cfg=JSON.parse(jsonStr.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g,'"$2":').replace(/'/g,'"'));
+      setFields({
+        apiKey:cfg.apiKey||"",
+        authDomain:cfg.authDomain||"",
+        projectId:cfg.projectId||"",
+        storageBucket:cfg.storageBucket||"",
+        messagingSenderId:cfg.messagingSenderId||"",
+        appId:cfg.appId||""
+      });
+      setMode("fields");
+      setErr("");
+    }catch{setErr("Não foi possível interpretar o código colado. Preencha os campos manualmente.")}
+  };
+
+  const connect=async()=>{
+    const cfg=mode==="paste"?tryParseRaw(raw):fields;
+    if(!cfg?.projectId||!cfg?.apiKey){setErr("projectId e apiKey são obrigatórios.");return}
+    setLoading(true);setErr("");
+    const res=await initFirebase(cfg);
+    if(res.ok){
+      saveFirestoreConfig(cfg);
+      onConnected(cfg);
+    }else{
+      setErr("Falha ao conectar: "+res.error);
+    }
+    setLoading(false);
+  };
+
+  function tryParseRaw(txt){
+    try{
+      const match=txt.match(/firebaseConfig\s*=\s*(\{[\s\S]*?\})/);
+      const s=match?match[1]:txt;
+      return JSON.parse(s.replace(/(['"])?([a-zA-Z0-9_]+)(['"])?:/g,'"$2":').replace(/'/g,'"'));
+    }catch{return null}
+  }
+
+  return(
+    <div style={{minHeight:"100vh",background:"linear-gradient(135deg,#0f172a 0%,#1e3a5f 60%,#0f172a 100%)",
+      display:"flex",alignItems:"center",justifyContent:"center",padding:20}}>
+      <div style={{background:"var(--bg-card)",borderRadius:20,padding:"40px 36px",width:"100%",maxWidth:560,
+        boxShadow:"0 30px 80px rgba(0,0,0,.35)"}}>
+
+        {/* Logo */}
+        <div style={{textAlign:"center",marginBottom:32}}>
+          <div style={{width:64,height:64,background:"linear-gradient(135deg,#1d4ed8,#7c3aed)",borderRadius:"50%",
+            margin:"0 auto 14px",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,color:"#fff"}}>🔥</div>
+          <h1 style={{fontSize:20,fontWeight:800,color:"var(--text-primary)"}}>Conectar ao Firebase</h1>
+          <p style={{fontSize:13,color:"var(--text-muted)",marginTop:6,lineHeight:1.6}}>
+            Configure o banco de dados em nuvem para sincronizar os dados entre dispositivos.
+          </p>
+        </div>
+
+        {/* Mode tabs */}
+        <div style={{display:"flex",gap:6,marginBottom:20,background:"var(--bg-card3)",borderRadius:10,padding:4}}>
+          {[["paste","📋 Colar código do Firebase"],["fields","⌨️ Preencher manualmente"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setMode(v)}
+              style={{flex:1,padding:"8px 0",borderRadius:8,border:"none",fontSize:12,fontWeight:600,
+                background:mode===v?"#fff":"transparent",color:mode===v?"#1d4ed8":"#64748b",cursor:"pointer",
+                boxShadow:mode===v?"0 1px 4px rgba(0,0,0,.1)":"none"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+
+        {mode==="paste"&&(
+          <div style={{marginBottom:16}}>
+            <label style={{fontSize:12,fontWeight:700,color:"var(--text-secondary)",display:"block",marginBottom:8}}>
+              Cole o objeto <code style={{background:"var(--bg-card3)",padding:"2px 6px",borderRadius:4}}>firebaseConfig</code> do seu projeto:
+            </label>
+            <textarea value={raw} onChange={e=>setRaw(e.target.value)} rows={7}
+              placeholder={`const firebaseConfig = {\n  apiKey: "AIza...",\n  authDomain: "...",\n  projectId: "...",\n  ...\n};`}
+              style={{...IS,resize:"vertical",fontFamily:"monospace",fontSize:12,lineHeight:1.5}}/>
+            <button onClick={parseRaw} style={{marginTop:8,padding:"7px 16px",background:"#eff6ff",
+              border:"1px solid #bfdbfe",borderRadius:8,color:"#1d4ed8",fontSize:12,fontWeight:700,cursor:"pointer"}}>
+              Interpretar →
+            </button>
+          </div>
+        )}
+
+        {mode==="fields"&&(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
+            {[
+              ["apiKey","API Key *","AIzaSy..."],
+              ["authDomain","Auth Domain *","projeto.firebaseapp.com"],
+              ["projectId","Project ID *","meu-projeto"],
+              ["storageBucket","Storage Bucket","projeto.appspot.com"],
+              ["messagingSenderId","Messaging Sender ID","123456789"],
+              ["appId","App ID","1:123:web:abc"],
+            ].map(([k,l,ph])=>(
+              <div key={k}>
+                <label style={{fontSize:11,fontWeight:700,color:"var(--text-secondary)",display:"block",marginBottom:4}}>{l}</label>
+                <input value={fields[k]} onChange={e=>setF(k,e.target.value)} placeholder={ph}
+                  style={{...IS,fontSize:12,padding:"8px 10px"}}/>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {err&&<div style={{background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,padding:"10px 14px",
+          fontSize:12,color:"#dc2626",marginBottom:14}}>{err}</div>}
+
+        {/* How to get config */}
+        <details style={{marginBottom:20}}>
+          <summary style={{fontSize:12,color:"#2563eb",cursor:"pointer",fontWeight:600,marginBottom:8}}>
+            📖 Como obter as credenciais do Firebase?
+          </summary>
+          <ol style={{fontSize:12,color:"var(--text-muted)",lineHeight:2,paddingLeft:16,marginTop:8}}>
+            <li>Acesse <strong>console.firebase.google.com</strong> e crie um projeto (plano gratuito Spark)</li>
+            <li>No menu lateral, clique em <strong>Firestore Database</strong> → Criar banco de dados</li>
+            <li>Escolha <strong>Modo de teste</strong> (30 dias) para começar</li>
+            <li>Volte à página inicial do projeto → clique no ícone <strong>&lt;/&gt; Web</strong></li>
+            <li>Registre o app e copie o objeto <strong>firebaseConfig</strong></li>
+            <li>Cole aqui na aba "Colar código" acima</li>
+          </ol>
+        </details>
+
+        <div style={{display:"flex",gap:10}}>
+          <button onClick={connect} disabled={loading}
+            style={{flex:1,padding:"12px",background:loading?"#93c5fd":"linear-gradient(135deg,#1d4ed8,#7c3aed)",
+              color:"#fff",border:"none",borderRadius:10,fontSize:14,fontWeight:700,
+              cursor:loading?"not-allowed":"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+            {loading&&<Spinner size={18} color="#fff"/>}
+            {loading?"Conectando...":"🔥 Conectar ao Firebase"}
+          </button>
+          <button onClick={onSkip}
+            style={{padding:"12px 18px",background:"var(--bg-card3)",border:"1px solid var(--border)",
+              borderRadius:10,fontSize:13,color:"var(--text-muted)",cursor:"pointer",fontWeight:600}}>
+            Usar local
+          </button>
+        </div>
+        <p style={{textAlign:"center",fontSize:11,color:"var(--text-hint)",marginTop:12}}>
+          "Usar local" armazena dados apenas neste navegador (sem sincronização)
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  APP ROOT
+// ════════════════════════════════════════════════════════════════
+function App(){
+  const [fbReady,setFbReady]=useState(null);
+  const [db,setDb]=useState(null);
+  const [user,setUser]=useState(null);
+  const [page,setPage]=useState("login");
+  const [toasts,setToasts]=useState([]);
+  const [confirm,setConfirm]=useState(null);
+  const [syncing,setSyncing]=useState(false);
+  const [dark,setDark]=useState(()=>{
+    const saved=localStorage.getItem("theme");
+    return saved?saved==="dark":true; // dark por padrão
+  });
+
+  useEffect(()=>{
+    document.body.classList.remove("light","dark");
+    document.body.classList.add(dark?"dark":"light");
+    localStorage.setItem("theme",dark?"dark":"light");
+  },[dark]);
+
+  const toggleTheme=()=>setDark(d=>!d);
+
+  // On mount: conecta ao Firebase automaticamente
+  useEffect(()=>{
+    initFirebase(FIREBASE_CONFIG).then(res=>{
+      if(res.ok){
+        setFbReady(true);
+      }else{
+        // Firebase falhou → modo local como fallback
+        console.warn("Firebase indisponível, usando localStorage:",res.error);
+        setFbReady(false);
+      }
+    });
+  },[]);
+
+  // Subscribe to Firestore collections once firebase is ready
+  useEffect(()=>{
+    if(fbReady!==true){
+      if(fbReady===false){
+        // local mode
+        setDb(loadLocal());
+      }
+      return;
+    }
+    // Realtime listeners for all collections
+    const unsubs=[];
+    const state={users:[],income:[],expenses:[],logs:[]};
+    const update=()=>setDb({...state});
+
+    unsubs.push(fbSubscribe(COL.users,"createdAt",docs=>{state.users=docs.length?docs:INIT_LOCAL.users;update()}));
+    unsubs.push(fbSubscribe(COL.income,"createdAt",docs=>{state.income=docs;update()}));
+    unsubs.push(fbSubscribe(COL.expenses,"createdAt",docs=>{state.expenses=docs;update()}));
+    unsubs.push(fbSubscribe(COL.logs,"timestamp",docs=>{state.logs=docs;update()}));
+
+    // Bootstrap admin user if collection is empty after 3s
+    setTimeout(async()=>{
+      const snap=await _db.collection(COL.users).get();
+      if(snap.empty){
+        const admin=INIT_LOCAL.users[0];
+        await fbSet(COL.users,admin.id,admin);
+      }
+    },3000);
+
+    return()=>unsubs.forEach(u=>u());
+  },[fbReady]);
+
+  const toast=useCallback((msg,type="success")=>{
+    const id=uid();setToasts(t=>[...t,{id,msg,type}]);
+  },[]);
+  const removeToast=id=>setToasts(t=>t.filter(x=>x.id!==id));
+  const showConfirm=msg=>new Promise(res=>setConfirm({msg,resolve:res}));
+  const handleConfirm=val=>{confirm?.resolve(val);setConfirm(null)};
+
+  // Universal update: writes to Firestore OR localStorage
+  const updateDb=useCallback(async(newDb,fbOps=[])=>{
+    if(fbReady===true&&fbOps.length>0){
+      setSyncing(true);
+      await Promise.all(fbOps.map(op=>{
+        if(op.type==="set") return fbSet(op.col,op.id,op.data);
+        if(op.type==="delete") return fbDelete(op.col,op.id);
+        if(op.type==="log") return fbAddLog(op.data);
+        return Promise.resolve();
+      }));
+      setSyncing(false);
+      // Firestore listeners will update state automatically
+    }else{
+      setDb(newDb);
+      saveLocal(newDb);
+    }
+  },[fbReady]);
+
+  // Log helper
+  const mkLogEntry=(action,details,targetId=null)=>({
+    id:"l"+uid(),timestamp:nowISO(),
+    userId:user?.id,userName:user?.name,userRole:user?.role,
+    action,details,targetId,createdAt:nowISO()
+  });
+
+  const addLog=(action,details,targetId=null)=>{
+    const entry=mkLogEntry(action,details,targetId);
+    if(fbReady===true){
+      fbAddLog(entry);
+    }else{
+      setDb(prev=>{
+        const next={...prev,logs:[entry,...(prev.logs||[])].slice(0,1000)};
+        saveLocal(next);return next;
+      });
+    }
+  };
+
+  const login=u=>{setUser(u);setPage("dashboard")};
+  const logout=()=>{setUser(null);setPage("login")};
+
+  const disconnectFirebase=()=>{
+    // Reconectar ao Firebase (útil para resetar listeners)
+    setFbReady(null);
+    setDb(null);
+    setTimeout(()=>{
+      initFirebase(FIREBASE_CONFIG).then(res=>{
+        setFbReady(res.ok?true:false);
+      });
+    },500);
+  };
+
+  // Conectando ao Firebase...
+  if(fbReady===null){
+    return(
+      <div style={{height:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,background:"#0f172a"}}>
+        <div style={{width:64,height:64,background:"linear-gradient(135deg,#1d4ed8,#7c3aed)",borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28}}>🔥</div>
+        <Spinner size={36} color="#6366f1"/>
+        <p style={{fontSize:14,color:"var(--text-hint)",fontWeight:600}}>Conectando ao Firebase...</p>
+      </div>
+    );
+  }
+
+  // Loading
+  if(!db){
+    return(
+      <div style={{height:"100vh",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16}}>
+        <Spinner size={40}/>
+        <p style={{fontSize:14,color:"var(--text-muted)"}}>Carregando dados{fbReady===true?" do Firebase":""}...</p>
+      </div>
+    );
+  }
+
+  const canLog=user&&["master","auditor","gestor"].includes(user.role);
+  const canUsers=user&&user.role==="master";
+
+  return(
+    <>
+      {toasts.map(t=><Toast key={t.id} msg={t.msg} type={t.type} onClose={()=>removeToast(t.id)}/>)}
+      {confirm&&<ConfirmModal msg={confirm.msg} onConfirm={()=>handleConfirm(true)} onCancel={()=>handleConfirm(false)}/>}
+      {!user
+        ?<LoginPage db={db} onLogin={login} toast={toast}/>
+        :(
+          <div style={{display:"flex",height:"100vh",overflow:"hidden"}}>
+            <Sidebar page={page} setPage={setPage} user={user} onLogout={logout}
+              canLog={canLog} canUsers={canUsers} fbReady={fbReady} syncing={syncing}
+              onDisconnect={disconnectFirebase} dark={dark} toggleTheme={toggleTheme}/>
+            <main style={{flex:1,overflow:"auto",background:"var(--bg-main)"}}>
+              {page==="dashboard"&&<DashboardPage db={db} toast={toast} fbReady={fbReady}/>}
+              {page==="income"&&<IncomePage db={db} updateDb={updateDb} user={user} toast={toast} showConfirm={showConfirm} addLog={addLog} fbReady={fbReady}/>}
+              {page==="expenses"&&<ExpensesPage db={db} updateDb={updateDb} user={user} toast={toast} showConfirm={showConfirm} addLog={addLog} fbReady={fbReady}/>}
+              {page==="users"&&canUsers&&<UsersPage db={db} updateDb={updateDb} user={user} toast={toast} showConfirm={showConfirm} addLog={addLog} fbReady={fbReady}/>}
+              {page==="logs"&&canLog&&<LogPage db={db}/>}
+              {page==="profile"&&<ProfilePage user={user} db={db} updateDb={updateDb} setUser={setUser} toast={toast} addLog={addLog} fbReady={fbReady}/>}
+            </main>
+          </div>
+        )}
+    </>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  LOGIN
+// ════════════════════════════════════════════════════════════════
+function LoginPage({db,onLogin,toast}){
+  const [email,setEmail]=useState("");
+  const [pass,setPass]=useState("");
+  const [show,setShow]=useState(false);
+  const [loading,setLoading]=useState(false);
+  const handle=()=>{
+    if(!email||!pass){toast("Preencha usuário e senha","error");return}
+    setLoading(true);
+    setTimeout(()=>{
+      const u=(db.users||[]).find(u=>u.email.toLowerCase()===email.toLowerCase()&&u.password===pass&&u.active);
+      if(u)onLogin(u);
+      else{toast("Credenciais inválidas ou usuário inativo","error");setLoading(false)}
+    },600);
+  };
+  return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",
+      background:"linear-gradient(135deg,#0f172a 0%,#1e3a5f 50%,#0f172a 100%)"}}>
+      <div style={{background:"var(--bg-card)",borderRadius:20,padding:"48px 40px",width:400,
+        boxShadow:"0 30px 80px rgba(0,0,0,.35)",animation:"fadeIn .4s ease"}}>
+        <div style={{textAlign:"center",marginBottom:36}}>
+          <div style={{width:70,height:70,background:"linear-gradient(135deg,#1d4ed8,#7c3aed)",borderRadius:"50%",
+            margin:"0 auto 16px",display:"flex",alignItems:"center",justifyContent:"center",
+            boxShadow:"0 8px 24px rgba(124,58,237,.35)"}}>
+            <span style={{fontSize:32,color:"#fff"}}>✝</span>
+          </div>
+          <h1 style={{fontSize:22,fontWeight:800,color:"var(--text-primary)",marginBottom:4}}>Gestão Financeira</h1>
+          <p style={{fontSize:13,color:"var(--text-muted)"}}>Painel Administrativo da Igreja</p>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:16}}>
+          <div>
+            <label style={{fontSize:12,fontWeight:700,color:"var(--text-secondary)",display:"block",marginBottom:6}}>Usuário</label>
+            <input value={email} onChange={e=>setEmail(e.target.value)} type="text" placeholder="usuário ou e-mail"
+              onKeyDown={e=>e.key==="Enter"&&handle()}
+              style={{width:"100%",padding:"12px 14px",border:`1.5px solid ${email?"#1d4ed8":"#e5e7eb"}`,borderRadius:10,fontSize:14,outline:"none"}}/>
+          </div>
+          <div>
+            <label style={{fontSize:12,fontWeight:700,color:"var(--text-secondary)",display:"block",marginBottom:6}}>Senha</label>
+            <div style={{position:"relative"}}>
+              <input value={pass} onChange={e=>setPass(e.target.value)} type={show?"text":"password"} placeholder="••••••••"
+                onKeyDown={e=>e.key==="Enter"&&handle()}
+                style={{width:"100%",padding:"12px 44px 12px 14px",border:`1.5px solid ${pass?"#1d4ed8":"#e5e7eb"}`,borderRadius:10,fontSize:14,outline:"none"}}/>
+              <button onClick={()=>setShow(s=>!s)} style={{position:"absolute",right:12,top:"50%",transform:"translateY(-50%)",
+                background:"none",border:"none",cursor:"pointer",fontSize:18,color:"var(--text-muted)"}}>{show?"🙈":"👁"}</button>
+            </div>
+          </div>
+          <button onClick={handle} disabled={loading}
+            style={{padding:"13px",background:loading?"#93c5fd":"linear-gradient(135deg,#1d4ed8,#7c3aed)",
+              color:"#fff",border:"none",borderRadius:10,fontSize:15,fontWeight:700,
+              cursor:loading?"not-allowed":"pointer",marginTop:4,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+            {loading&&<Spinner size={18} color="#fff"/>}{loading?"Verificando...":"Entrar →"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  SIDEBAR
+// ════════════════════════════════════════════════════════════════
+function Sidebar({page,setPage,user,onLogout,canLog,canUsers,fbReady,syncing,onDisconnect,dark,toggleTheme}){
+  const items=[
+    {id:"dashboard",icon:"📊",label:"Painel BI"},
+    {id:"income",icon:"💰",label:"Entradas"},
+    {id:"expenses",icon:"📤",label:"Custos"},
+    ...(canUsers?[{id:"users",icon:"👥",label:"Usuários"}]:[]),
+    ...(canLog?[{id:"logs",icon:"📋",label:"Histórico de Log"}]:[]),
+    {id:"profile",icon:"👤",label:"Meu Perfil"},
+  ];
+  return(
+    <div style={{width:224,background:"var(--bg-sidebar)",display:"flex",flexDirection:"column",flexShrink:0,borderRight:"1px solid #1e293b"}}>
+      <div style={{padding:"18px 16px 14px",borderBottom:"1px solid #1e293b"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10}}>
+          <div style={{width:36,height:36,background:"linear-gradient(135deg,#1d4ed8,#7c3aed)",
+            borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0}}>✝</div>
+          <div>
+            <div style={{fontSize:13,fontWeight:700,color:"#f1f5f9"}}>Igreja</div>
+            <div style={{fontSize:10,color:"var(--text-muted)"}}>Gestão Financeira</div>
+          </div>
+        </div>
+        {/* Firebase status badge */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+          background:"#1e293b",borderRadius:8,padding:"6px 10px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            {syncing?<Spinner size={12} color="#f59e0b"/>:<span style={{width:8,height:8,borderRadius:"50%",
+              background:fbReady?"#22c55e":"#f59e0b",display:"inline-block",flexShrink:0}}/>}
+            <span style={{fontSize:10,color:fbReady?"#86efac":"#fcd34d",fontWeight:600}}>
+              {syncing?"Sincronizando...":fbReady?"🔥 Firebase":"💾 Local"}
+            </span>
+          </div>
+          {fbReady&&<button onClick={onDisconnect} title="Reconectar Firebase"
+            style={{background:"none",border:"none",color:"var(--text-muted)",cursor:"pointer",fontSize:14,lineHeight:1}}>⚙</button>}
+        </div>
+      </div>
+      <nav style={{flex:1,padding:"10px 8px",overflow:"auto"}}>
+        {items.map(item=>(
+          <button key={item.id} onClick={()=>setPage(item.id)}
+            style={{display:"flex",alignItems:"center",gap:10,width:"100%",padding:"10px 12px",
+              background:page===item.id?"var(--bg-sidebar-hover)":"transparent",border:"none",borderRadius:9,
+              color:page===item.id?"#fff":"#94a3b8",fontSize:13,fontWeight:page===item.id?700:400,
+              cursor:"pointer",marginBottom:3,textAlign:"left",transition:"all .15s"}}>
+            <span style={{fontSize:16}}>{item.icon}</span>{item.label}
+          </button>
+        ))}
+      </nav>
+      <div style={{padding:"14px 12px",borderTop:"1px solid #1e293b"}}>
+        {/* Theme toggle */}
+        <button onClick={toggleTheme}
+          style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",
+            padding:"8px 10px",background:"#1e293b",border:"none",borderRadius:8,
+            cursor:"pointer",marginBottom:8}}>
+          <span style={{fontSize:11,color:"var(--text-hint)",fontWeight:600}}>{dark?"🌙 Modo Escuro":"☀️ Modo Claro"}</span>
+          <div style={{width:36,height:20,borderRadius:10,background:dark?"#6366f1":"#94a3b8",
+            position:"relative",transition:"background .25s",flexShrink:0}}>
+            <div style={{position:"absolute",top:2,left:dark?18:2,width:16,height:16,borderRadius:"50%",
+              background:"var(--bg-card)",transition:"left .25s",boxShadow:"0 1px 3px rgba(0,0,0,.3)"}}/>
+          </div>
+        </button>
+        <div style={{marginBottom:8}}>
+          <div style={{fontSize:12,fontWeight:700,color:"#e2e8f0",marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.name}</div>
+          <span style={{display:"inline-block",marginTop:4,padding:"2px 8px",background:ROLE_CLR[user.role]+"30",
+            color:ROLE_CLR[user.role],borderRadius:4,fontSize:10,fontWeight:700}}>{ROLE_LABEL[user.role]}</span>
+        </div>
+        <button onClick={onLogout} style={{width:"100%",padding:"8px",background:"#1e293b",border:"none",
+          borderRadius:8,color:"#f87171",fontSize:12,cursor:"pointer",fontWeight:700}}>Sair ↩</button>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  DASHBOARD
+// ════════════════════════════════════════════════════════════════
+function DashboardPage({db,toast,fbReady}){
+  const approved=(db.income||[]).filter(i=>i.status==="aprovado");
+  const pending=(db.income||[]).filter(i=>i.status==="pendente");
+  const totalInc=approved.reduce((s,i)=>s+i.amount,0);
+  const totalExp=(db.expenses||[]).reduce((s,e)=>s+e.amount,0);
+  const balance=totalInc-totalExp;
+  const months4=[1,2,3,4];
+  const monthly=months4.map(m=>({label:MONTHS[m-1],
+    inc:approved.reduce((s,i)=>new Date(i.date).getMonth()+1===m?s+i.amount:s,0),
+    exp:(db.expenses||[]).reduce((s,e)=>new Date(e.date).getMonth()+1===m?s+e.amount:s,0)}));
+  const expByCat={};
+  (db.expenses||[]).forEach(e=>{expByCat[e.category]=(expByCat[e.category]||0)+e.amount});
+  const topCats=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).slice(0,6);
+  const expByType={fixo:0,variavel:0,imprevisto:0};
+  (db.expenses||[]).forEach(e=>{expByType[e.type]=(expByType[e.type]||0)+e.amount});
+  const incByType={dizimo:0,oferta:0};
+  approved.forEach(i=>{incByType[i.type]=(incByType[i.type]||0)+i.amount});
+
+  const barRef=useRef();const barCh=useRef();
+  const dRef=useRef();const dCh=useRef();
+  useEffect(()=>{
+    if(barRef.current){
+      if(barCh.current)barCh.current.destroy();
+      barCh.current=new Chart(barRef.current,{type:"bar",
+        data:{labels:monthly.map(m=>m.label),datasets:[
+          {label:"Entradas",data:monthly.map(m=>m.inc),backgroundColor:"#10b981",borderRadius:4,borderSkipped:false},
+          {label:"Custos",data:monthly.map(m=>m.exp),backgroundColor:"#f43f5e",borderRadius:4,borderSkipped:false},
+        ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
+          scales:{x:{grid:{display:false}},y:{grid:{color:"#f1f5f9"},ticks:{callback:v=>"R$"+v.toLocaleString("pt-BR")}}}}});
+    }
+    if(dRef.current){
+      if(dCh.current)dCh.current.destroy();
+      dCh.current=new Chart(dRef.current,{type:"doughnut",
+        data:{labels:["Fixo","Variável","Imprevisto"],datasets:[{
+          data:[expByType.fixo,expByType.variavel,expByType.imprevisto],
+          backgroundColor:["#0d9488","#7c3aed","#dc2626"],borderWidth:0,hoverOffset:4}]},
+        options:{responsive:true,maintainAspectRatio:false,cutout:"65%",plugins:{legend:{display:false}}}});
+    }
+    return()=>{barCh.current?.destroy();dCh.current?.destroy()};
+  },[]);
+
+  const genXLS=()=>{
+    const doIt=()=>{
+      const XLSX=window.XLSX;const wb=XLSX.utils.book_new();
+      const today=new Date().toLocaleDateString("pt-BR");
+      const iso=new Date().toISOString().slice(0,10);
+      const add=(name,rows)=>XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),name);
+      add("Resumo",[["PAINEL DE TRANSPARÊNCIA"],[`Gerado: ${today} — ${fbReady?"Firebase":"Local"}`],[],
+        ["Total Arrecadado","",totalInc],["Pendentes","",pending.length+" entradas"],
+        ["Total Custos","",totalExp],["Saldo","",balance],[],
+        ["Dízimos","",incByType.dizimo],["Ofertas","",incByType.oferta],[],
+        ["Custo Fixo","",expByType.fixo],["Custo Variável","",expByType.variavel],["Imprevisto","",expByType.imprevisto],[],
+        ["MENSAL","Entradas","Custos","Saldo"],...monthly.map(m=>[m.label,m.inc,m.exp,m.inc-m.exp])]);
+      add("Entradas",[["ENTRADAS APROVADAS"],[],
+        ["Data","Tipo","Descrição","Valor","Inserido por","Aprovado por"],
+        ...approved.sort((a,b)=>b.date.localeCompare(a.date))
+          .map(i=>[fmtDate(i.date),i.type,i.description,i.amount,i.createdBy||"—",i.approvedBy||"—"]),
+        [],[,,,"TOTAL",totalInc]]);
+      add("Pendentes",[["PENDENTES"],[],["Data","Tipo","Descrição","Valor","Inserido por"],
+        ...pending.map(i=>[fmtDate(i.date),i.type,i.description,i.amount,i.createdBy||"—"])]);
+      add("Custos",[["CUSTOS"],[],["Data","Categoria","Descrição","Tipo","Valor","Inserido por"],
+        ...(db.expenses||[]).sort((a,b)=>b.date.localeCompare(a.date))
+          .map(e=>[fmtDate(e.date),e.category,e.description,e.type,e.amount,e.createdBy||"—"]),
+        [],[,,,"TOTAL",totalExp]]);
+      add("Log",[["LOG DO SISTEMA"],[],["Data/Hora","Usuário","Perfil","Ação","Detalhes"],
+        ...(db.logs||[]).map(l=>[fmtDT(l.timestamp),l.userName,ROLE_LABEL[l.userRole]||l.userRole,l.action,l.details])]);
+      XLSX.writeFile(wb,`transparencia-${iso}.xlsx`);toast("✅ Excel gerado!");
+    };
+    if(window.XLSX)doIt();
+    else{const s=document.createElement("script");
+      s.src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+      s.onload=doIt;s.onerror=()=>toast("Erro ao carregar biblioteca","error");document.head.appendChild(s)}
+  };
+
+  return(
+    <div className="page" style={{padding:28}}>
+      <PH title="Painel de BI Financeiro" subtitle="Visão geral das finanças da igreja">
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          {pending.length>0&&<div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 14px",
+            background:"#1a1200",border:"1px solid #78500a",borderRadius:10,fontSize:12,fontWeight:700,color:"#fbbf24"}}>
+            ⏳ {pending.length} pendente{pending.length>1?"s":""}
+          </div>}
+          <button onClick={genXLS} style={{display:"flex",alignItems:"center",gap:8,padding:"10px 18px",
+            background:"#0f172a",color:"#fff",border:"none",borderRadius:10,fontSize:13,fontWeight:700,cursor:"pointer"}}>
+            📊 Gerar Relatório Excel
+          </button>
+        </div>
+      </PH>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
+        {[
+          {label:"Total Arrecadado",value:fmt(totalInc),color:"#059669",bg:"#ecfdf5",icon:"📈"},
+          {label:"Total de Custos",value:fmt(totalExp),color:"#dc2626",bg:"#fef2f2",icon:"📉"},
+          {label:"Saldo em Caixa",value:fmt(balance),color:balance>=0?"#059669":"#dc2626",bg:balance>=0?"#ecfdf5":"#fef2f2",icon:"💼"},
+          {label:"Média Mensal",value:fmt(totalInc/4),color:"#7c3aed",bg:"#f5f3ff",icon:"📊"},
+        ].map((k,i)=>(
+          <div key={i} style={{background:"var(--bg-card)",borderRadius:14,padding:"18px 16px",border:"1px solid var(--border)",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
+              <span style={{fontSize:11,fontWeight:700,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:.5}}>{k.label}</span>
+              <span style={{background:k.bg,padding:"4px 8px",borderRadius:8,fontSize:18}}>{k.icon}</span>
+            </div>
+            <div style={{fontSize:19,fontWeight:800,color:k.color}}>{k.value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"2fr 1fr",gap:14,marginBottom:14}}>
+        <div style={{background:"var(--bg-card)",borderRadius:14,padding:20,border:"1px solid var(--border)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+            <h3 style={{fontSize:14,fontWeight:700,color:"var(--text-primary)"}}>Evolução Mensal</h3>
+            <div style={{display:"flex",gap:14}}>
+              {[["#10b981","Entradas"],["#f43f5e","Custos"]].map(([c,l])=>(
+                <span key={l} style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--text-muted)"}}>
+                  <span style={{width:10,height:10,background:c,borderRadius:2,display:"inline-block"}}/>{l}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div style={{position:"relative",height:200}}><canvas ref={barRef} role="img" aria-label="Gráfico mensal"/></div>
+        </div>
+        <div style={{background:"var(--bg-card)",borderRadius:14,padding:20,border:"1px solid var(--border)"}}>
+          <h3 style={{fontSize:14,fontWeight:700,color:"var(--text-primary)",marginBottom:16}}>Tipos de Custo</h3>
+          <div style={{position:"relative",height:140}}><canvas ref={dRef} role="img" aria-label="Tipos de custo"/></div>
+          <div style={{display:"flex",flexDirection:"column",gap:7,marginTop:14}}>
+            {[["fixo","#0d9488"],["variavel","#7c3aed"],["imprevisto","#dc2626"]].map(([k,c])=>(
+              <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <span style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:"var(--text-secondary)"}}>
+                  <span style={{width:8,height:8,background:c,borderRadius:"50%",display:"inline-block"}}/>{EXP_TYPES[k]}
+                </span>
+                <span style={{fontSize:12,fontWeight:700,color:"var(--text-primary)"}}>{fmt(expByType[k])}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <div style={{background:"var(--bg-card)",borderRadius:14,padding:20,border:"1px solid var(--border)"}}>
+          <h3 style={{fontSize:14,fontWeight:700,color:"var(--text-primary)",marginBottom:16}}>Maiores Gastos por Categoria</h3>
+          {topCats.length===0&&<p style={{fontSize:13,color:"var(--text-hint)"}}>Nenhum custo registrado.</p>}
+          {topCats.map(([cat,val],i)=>(
+            <div key={cat} style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                <span style={{fontSize:12,color:"var(--text-secondary)"}}>{cat}</span>
+                <span style={{fontSize:12,fontWeight:700,color:"var(--text-primary)"}}>{fmt(val)}</span>
+              </div>
+              <div style={{height:6,background:"var(--bg-card2)",borderRadius:3}}>
+                <div style={{height:"100%",width:`${(val/topCats[0][1])*100}%`,background:`hsl(${220-i*28},70%,55%)`,borderRadius:3}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:14}}>
+          <div style={{background:"var(--bg-card)",borderRadius:14,padding:20,border:"1px solid var(--border)"}}>
+            <h3 style={{fontSize:14,fontWeight:700,color:"var(--text-primary)",marginBottom:14}}>Arrecadação por Tipo</h3>
+            {[["dizimo","#1d4ed8"],["oferta","#7c3aed"]].map(([k,c])=>(
+              <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <span style={{fontSize:13,color:"var(--text-secondary)"}}>{INC_LABELS[k]}</span>
+                <div style={{textAlign:"right"}}>
+                  <div style={{fontSize:14,fontWeight:800,color:c}}>{fmt(incByType[k])}</div>
+                  <div style={{fontSize:10,color:"var(--text-hint)"}}>{totalInc?((incByType[k]/totalInc)*100).toFixed(1):0}%</div>
+                </div>
+              </div>
+            ))}
+          </div>
+          {(balance<0||pending.length>0)&&(
+            <div style={{background:"#1a1200",borderRadius:14,padding:16,border:"1px solid #78500a"}}>
+              <h3 style={{fontSize:13,fontWeight:800,color:"#fbbf24",marginBottom:8}}>⚠️ Atenção</h3>
+              {balance<0&&<div style={{fontSize:12,color:"#dc2626",fontWeight:700,marginBottom:4}}>🚨 Saldo negativo!</div>}
+              {pending.length>0&&<div style={{fontSize:12,color:"#d97706",fontWeight:700}}>⏳ {pending.length} entrada{pending.length>1?"s":""} aguardando aprovação</div>}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  INCOME PAGE
+// ════════════════════════════════════════════════════════════════
+function IncomePage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
+  const isAgente=user.role==="agente";
+  const isReadOnly=user.role==="auditor";
+  const canCreate=can(user,"createIncome")||["master","gestor"].includes(user.role);
+  const canEdit=["master","gestor"].includes(user.role)||can(user,"editIncome");
+  const canDelete=["master","gestor"].includes(user.role)||can(user,"deleteIncome");
+  const canApprove=["master","gestor"].includes(user.role);
+  const blank={type:"dizimo",description:"",amount:"",date:new Date().toISOString().slice(0,10),receipt:null};
+  const [showForm,setShowForm]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [form,setForm]=useState(blank);
+  const [recPrev,setRecPrev]=useState(null);
+  const [filter,setFilter]=useState("todos");
+  const [saving,setSaving]=useState(false);
+  const fileRef=useRef();
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const reset=()=>{setForm(blank);setRecPrev(null);setEditing(null);setShowForm(false)};
+
+  const save=async()=>{
+    if(!form.description||!form.amount){toast("Preencha todos os campos","error");return}
+    setSaving(true);
+    const amt=parseFloat(form.amount);
+    if(editing){
+      const entry={...form,amount:amt};
+      const newDb={...db,income:(db.income||[]).map(i=>i.id===editing?{...i,...entry}:i)};
+      await updateDb(newDb,fbReady?[{type:"set",col:COL.income,id:editing,data:{...((db.income||[]).find(i=>i.id===editing)||{}), ...entry}}]:[]);
+      addLog("EDITAR_ENTRADA",`Editou entrada: "${form.description}" — ${fmt(amt)}`,editing);
+      toast("Entrada atualizada!");
+    }else{
+      const status=isAgente?"pendente":"aprovado";
+      const id="i"+uid();
+      const entry={...form,amount:amt,id,status,createdBy:user.name,createdAt:nowISO(),
+        ...(status==="aprovado"?{approvedBy:user.name,approvedAt:nowISO()}:{})};
+      const newDb={...db,income:[...(db.income||[]),entry]};
+      await updateDb(newDb,fbReady?[{type:"set",col:COL.income,id,data:entry}]:[]);
+      addLog(isAgente?"INSERIR_ENTRADA_PENDENTE":"INSERIR_ENTRADA",
+        `${isAgente?"Enviou para aprovação":"Inseriu entrada"}: "${entry.description}" — ${fmt(amt)}`);
+      toast(isAgente?"Entrada enviada para aprovação! ⏳":"Entrada adicionada!");
+    }
+    setSaving(false);reset();
+  };
+
+  const approve=async id=>{
+    const item=(db.income||[]).find(i=>i.id===id);
+    const ok=await showConfirm(`Aprovar "${item.description}" — ${fmt(item.amount)}?`);
+    if(!ok)return;
+    const upd={...item,status:"aprovado",approvedBy:user.name,approvedAt:nowISO()};
+    const newDb={...db,income:(db.income||[]).map(i=>i.id===id?upd:i)};
+    await updateDb(newDb,fbReady?[{type:"set",col:COL.income,id,data:upd}]:[]);
+    addLog("APROVAR_ENTRADA",`Aprovou: "${item.description}" — ${fmt(item.amount)} (de ${item.createdBy||"?"})`,id);
+    toast("Entrada aprovada! ✅");
+  };
+
+  const reject=async id=>{
+    const item=(db.income||[]).find(i=>i.id===id);
+    const ok=await showConfirm(`Rejeitar e excluir "${item.description}"?`);
+    if(!ok)return;
+    const newDb={...db,income:(db.income||[]).filter(i=>i.id!==id)};
+    await updateDb(newDb,fbReady?[{type:"delete",col:COL.income,id}]:[]);
+    addLog("REJEITAR_ENTRADA",`Rejeitou: "${item.description}" — ${fmt(item.amount)}`,id);
+    toast("Entrada rejeitada","warning");
+  };
+
+  const del=async id=>{
+    const item=(db.income||[]).find(i=>i.id===id);
+    const ok=await showConfirm("Excluir esta entrada?");
+    if(!ok)return;
+    const newDb={...db,income:(db.income||[]).filter(i=>i.id!==id)};
+    await updateDb(newDb,fbReady?[{type:"delete",col:COL.income,id}]:[]);
+    addLog("EXCLUIR_ENTRADA",`Excluiu: "${item?.description}" — ${fmt(item?.amount||0)}`,id);
+    toast("Entrada excluída","warning");
+  };
+
+  const startEdit=item=>{
+    setEditing(item.id);
+    setForm({type:item.type,description:item.description,amount:String(item.amount),date:item.date,receipt:item.receipt});
+    setRecPrev(item.receipt);setShowForm(true);
+    setTimeout(()=>window.scrollTo({top:0,behavior:"smooth"}),50);
+  };
+
+  const handleFile=e=>{
+    const f=e.target.files[0];if(!f)return;
+    const r=new FileReader();
+    r.onload=ev=>{setRecPrev(ev.target.result);set("receipt",ev.target.result)};
+    r.readAsDataURL(f);
+  };
+
+  const pending=(db.income||[]).filter(i=>i.status==="pendente");
+  const approved=(db.income||[]).filter(i=>i.status==="aprovado");
+  let displayed=[...(db.income||[])];
+  if(filter==="pendente")displayed=pending;
+  else if(filter==="aprovado")displayed=approved;
+  displayed=displayed.sort((a,b)=>(b.createdAt||b.date).localeCompare(a.createdAt||a.date));
+  if(isAgente)displayed=displayed.filter(i=>i.createdBy===user.name);
+
+  return(
+    <div className="page" style={{padding:28}}>
+      <PH title="Entradas Financeiras" subtitle={isAgente?"Suas entradas (aprovação necessária)":"Dízimos e ofertas"}>
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          {!isAgente&&<Pill color="#059669" bg="#ecfdf5">Aprovado: {fmt(approved.reduce((s,i)=>s+i.amount,0))}</Pill>}
+          {pending.length>0&&!isAgente&&<Pill color="#d97706" bg="#fef9c3">⏳ Pendente: {pending.length}</Pill>}
+          {canCreate&&!isReadOnly&&<Btn color="#059669" onClick={()=>setShowForm(true)}>{isAgente?"+ Enviar Entrada":"+ Nova Entrada"}</Btn>}
+        </div>
+      </PH>
+      {!isAgente&&!isReadOnly&&(
+        <div style={{display:"flex",gap:8,marginBottom:16}}>
+          {[["todos","Todas"],["aprovado","✅ Aprovadas"],["pendente","⏳ Pendentes"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setFilter(v)}
+              style={{padding:"7px 16px",borderRadius:8,border:"1.5px solid",
+                borderColor:filter===v?"#1d4ed8":"var(--border)",background:filter===v?"#1d4ed8":"var(--bg-card)",
+                color:filter===v?"#fff":"var(--text-muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{l}</button>
+          ))}
+        </div>
+      )}
+      {isAgente&&<div style={{background:"#0d1f3c",border:"1px solid #1e3a8a",borderRadius:12,padding:"14px 18px",marginBottom:20,fontSize:13,color:"#93c5fd"}}>
+        💡 Suas entradas aguardam aprovação do <strong>Gestor</strong> antes de serem contabilizadas.
+      </div>}
+      {showForm&&(
+        <FC title={editing?"Editar Entrada":isAgente?"Enviar para Aprovação":"Nova Entrada"} onClose={reset}>
+          {isAgente&&!editing&&<div style={{background:"#1a1200",border:"1px solid #78500a",borderRadius:8,padding:"10px 14px",marginBottom:16,fontSize:12,color:"#fbbf24",fontWeight:600}}>
+            ⏳ Esta entrada será enviada ao Gestor para aprovação antes de ser contabilizada.
+          </div>}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <Fld label="Tipo *"><select value={form.type} onChange={e=>set("type",e.target.value)} style={IS}><option value="dizimo">Dízimo</option><option value="oferta">Oferta</option></select></Fld>
+            <Fld label="Valor (R$) *"><input type="number" step="0.01" value={form.amount} onChange={e=>set("amount",e.target.value)} placeholder="0,00" style={IS}/></Fld>
+            <Fld label="Descrição *" span><input value={form.description} onChange={e=>set("description",e.target.value)} placeholder="Ex: Dízimo culto domingo" style={IS}/></Fld>
+            <Fld label="Data *"><input type="date" value={form.date} onChange={e=>set("date",e.target.value)} style={IS}/></Fld>
+            <Fld label="📎 Comprovante">
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <button onClick={()=>fileRef.current.click()} style={{padding:"9px 14px",border:"1.5px dashed #cbd5e1",borderRadius:9,background:"var(--bg-card2)",color:"var(--text-muted)",fontSize:12,cursor:"pointer",fontWeight:600}}>📷 Selecionar</button>
+                <input ref={fileRef} type="file" accept="image/*,application/pdf" onChange={handleFile} style={{display:"none"}}/>
+                {recPrev&&<div style={{display:"flex",alignItems:"center",gap:8}}>
+                  {recPrev.startsWith("data:image")&&<img src={recPrev} alt="prev" style={{width:44,height:44,objectFit:"cover",borderRadius:6,border:"1px solid var(--border)"}}/>}
+                  <span style={{fontSize:11,color:"#059669",fontWeight:700}}>✓ Anexado</span>
+                  <button onClick={()=>{setRecPrev(null);set("receipt",null)}} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>✕</button>
+                </div>}
+              </div>
+            </Fld>
+          </div>
+          <FA onSave={save} onCancel={reset} loading={saving} saveLabel={isAgente&&!editing?"Enviar para Aprovação":"Salvar"}/>
+        </FC>
+      )}
+      <div style={{background:"var(--bg-card)",borderRadius:14,border:"1px solid var(--border)",overflow:"auto"}}>
+        <table style={{minWidth:920}}>
+          <thead><tr style={{background:"var(--bg-card2)"}}>
+            {["Status","Tipo","Descrição","Data","Valor","Inserido por","Aprovado por","Comprovante","Ações"].map(h=>(
+              <th key={h} style={{padding:"11px 12px",fontSize:10,fontWeight:700,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:.5,borderBottom:"1px solid var(--border)",whiteSpace:"nowrap"}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {displayed.length===0&&<tr><td colSpan={9} style={{padding:32,textAlign:"center",color:"var(--text-hint)",fontSize:13}}>Nenhuma entrada encontrada.</td></tr>}
+            {displayed.map((item,i)=>{const pend=item.status==="pendente";return(
+              <tr key={item.id} style={{borderBottom:"1px solid var(--border)",background:pend?"#1f1700":i%2===0?"var(--bg-table-odd)":"var(--bg-table-even)"}}>
+                <td style={{padding:"10px 12px"}}><Pill color={pend?"#d97706":"#059669"} bg={pend?"#fef9c3":"#ecfdf5"}>{pend?"⏳ Pendente":"✅ Aprovado"}</Pill></td>
+                <td style={{padding:"10px 12px"}}><Pill color={item.type==="dizimo"?"#1d4ed8":"#7c3aed"} bg={item.type==="dizimo"?"#dbeafe":"#f3e8ff"}>{INC_LABELS[item.type]}</Pill></td>
+                <td style={{padding:"10px 12px",fontSize:13,color:"var(--text-secondary)"}}>{item.description}</td>
+                <td style={{padding:"10px 12px",fontSize:12,color:"var(--text-muted)",whiteSpace:"nowrap"}}>{fmtDate(item.date)}</td>
+                <td style={{padding:"10px 12px",fontSize:13,fontWeight:800,color:pend?"#d97706":"#059669",whiteSpace:"nowrap"}}>{fmt(item.amount)}</td>
+                <td style={{padding:"10px 12px",fontSize:11,color:"var(--text-muted)"}}>{item.createdBy||"—"}</td>
+                <td style={{padding:"10px 12px",fontSize:11,color:"var(--text-muted)"}}>{item.approvedBy||"—"}</td>
+                <td style={{padding:"10px 12px"}}>{item.receipt?<button onClick={()=>window.open(item.receipt)} style={{padding:"4px 10px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:6,color:"#1d4ed8",fontSize:11,cursor:"pointer",fontWeight:600}}>Ver 📎</button>:<span style={{fontSize:11,color:"var(--text-hint)"}}>—</span>}</td>
+                <td style={{padding:"10px 12px"}}><div style={{display:"flex",gap:5,flexWrap:"nowrap"}}>
+                  {pend&&canApprove&&<SBtn color="#059669" bg="#ecfdf5" bdr="#bbf7d0" onClick={()=>approve(item.id)}>✅ Aprovar</SBtn>}
+                  {pend&&canApprove&&<SBtn color="#dc2626" bg="#fef2f2" bdr="#fecaca" onClick={()=>reject(item.id)}>❌ Rejeitar</SBtn>}
+                  {!pend&&canEdit&&!isAgente&&<SBtn color="#059669" bg="#ecfdf5" bdr="#bbf7d0" onClick={()=>startEdit(item)}>Editar</SBtn>}
+                  {canDelete&&!isAgente&&<SBtn color="#dc2626" bg="#fef2f2" bdr="#fecaca" onClick={()=>del(item.id)}>Excluir</SBtn>}
+                  {isReadOnly&&<span style={{fontSize:11,color:"var(--text-hint)"}}>leitura</span>}
+                </div></td>
+              </tr>);
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  EXPENSES PAGE
+// ════════════════════════════════════════════════════════════════
+function ExpensesPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
+  const isReadOnly=user.role==="auditor"||user.role==="agente";
+  const canCreate=["master","gestor"].includes(user.role)||can(user,"createExpense");
+  const canEdit=["master","gestor"].includes(user.role)||can(user,"editExpense");
+  const canDelete=["master","gestor"].includes(user.role)||can(user,"deleteExpense");
+  const blank={category:"Conta de Luz",customCat:"",useCustom:false,type:"fixo",amount:"",date:new Date().toISOString().slice(0,10),description:""};
+  const [showForm,setShowForm]=useState(false);
+  const [editing,setEditing]=useState(null);
+  const [form,setForm]=useState(blank);
+  const [saving,setSaving]=useState(false);
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const reset=()=>{setForm(blank);setEditing(null);setShowForm(false)};
+
+  const save=async()=>{
+    const cat=form.useCustom?form.customCat:form.category;
+    if(!cat||!form.amount){toast("Preencha todos os campos","error");return}
+    setSaving(true);
+    const entry={category:cat,type:form.type,amount:parseFloat(form.amount),date:form.date,description:form.description};
+    if(editing){
+      const upd={...((db.expenses||[]).find(e=>e.id===editing)||{}),...entry};
+      const newDb={...db,expenses:(db.expenses||[]).map(e=>e.id===editing?upd:e)};
+      await updateDb(newDb,fbReady?[{type:"set",col:COL.expenses,id:editing,data:upd}]:[]);
+      addLog("EDITAR_CUSTO",`Editou custo: "${cat}" — ${fmt(parseFloat(form.amount))}`,editing);
+      toast("Custo atualizado!");
+    }else{
+      const id="e"+uid();
+      const newEntry={...entry,id,createdBy:user.name,createdAt:nowISO()};
+      const newDb={...db,expenses:[...(db.expenses||[]),newEntry]};
+      await updateDb(newDb,fbReady?[{type:"set",col:COL.expenses,id,data:newEntry}]:[]);
+      addLog("INSERIR_CUSTO",`Inseriu custo: "${cat}" — ${fmt(parseFloat(form.amount))}`);
+      toast("Custo adicionado!");
+    }
+    setSaving(false);reset();
+  };
+
+  const del=async id=>{
+    const item=(db.expenses||[]).find(e=>e.id===id);
+    const ok=await showConfirm("Excluir este custo?");
+    if(!ok)return;
+    const newDb={...db,expenses:(db.expenses||[]).filter(e=>e.id!==id)};
+    await updateDb(newDb,fbReady?[{type:"delete",col:COL.expenses,id}]:[]);
+    addLog("EXCLUIR_CUSTO",`Excluiu custo: "${item?.category}" — ${fmt(item?.amount||0)}`,id);
+    toast("Custo excluído","warning");
+  };
+
+  const startEdit=item=>{
+    setEditing(item.id);
+    const isCustom=!DEF_CATS.includes(item.category);
+    setForm({category:isCustom?"Conta de Luz":item.category,customCat:isCustom?item.category:"",useCustom:isCustom,
+      type:item.type,amount:String(item.amount),date:item.date,description:item.description});
+    setShowForm(true);setTimeout(()=>window.scrollTo({top:0,behavior:"smooth"}),50);
+  };
+
+  const total=(db.expenses||[]).reduce((s,e)=>s+e.amount,0);
+  const sorted=[...(db.expenses||[])].sort((a,b)=>(b.createdAt||b.date).localeCompare(a.createdAt||a.date));
+
+  return(
+    <div className="page" style={{padding:28}}>
+      <PH title="Registro de Custos" subtitle={isReadOnly?"Visualização — somente leitura":"Fixos, variáveis e imprevistos"}>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <Pill color="#dc2626" bg="#fef2f2">Total: {fmt(total)}</Pill>
+          {canCreate&&!isReadOnly&&<Btn color="#dc2626" onClick={()=>setShowForm(true)}>+ Novo Custo</Btn>}
+        </div>
+      </PH>
+      {isReadOnly&&<div style={{background:"#0d1f3c",border:"1px solid #1e3a8a",borderRadius:12,padding:"12px 18px",marginBottom:20,fontSize:13,color:"#93c5fd"}}>
+        🔒 Seu perfil permite somente visualizar os custos.
+      </div>}
+      <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
+        {Object.entries(EXP_TYPES).map(([k,v])=>(
+          <span key={k} style={{padding:"5px 13px",borderRadius:8,background:EXP_CLR[k]+"18",color:EXP_CLR[k],fontSize:11,fontWeight:700,border:`1px solid ${EXP_CLR[k]}35`}}>{v}</span>
+        ))}
+      </div>
+      {showForm&&(
+        <FC title={editing?"Editar Custo":"Novo Custo"} onClose={reset}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+            <Fld label="Categoria *">
+              <select value={form.useCustom?"__custom__":form.category}
+                onChange={e=>{if(e.target.value==="__custom__")set("useCustom",true);else{set("useCustom",false);set("category",e.target.value)}}} style={IS}>
+                {DEF_CATS.map(c=><option key={c} value={c}>{c}</option>)}
+                <option value="__custom__">+ Personalizado...</option>
+              </select>
+              {form.useCustom&&<input value={form.customCat} onChange={e=>set("customCat",e.target.value)} placeholder="Nome do custo personalizado" style={{...IS,marginTop:8}}/>}
+            </Fld>
+            <Fld label="Tipo *"><select value={form.type} onChange={e=>set("type",e.target.value)} style={IS}>
+              <option value="fixo">🟢 Custo Fixo</option><option value="variavel">🟣 Custo Variável</option><option value="imprevisto">🔴 Imprevisto</option>
+            </select></Fld>
+            <Fld label="Valor (R$) *"><input type="number" step="0.01" value={form.amount} onChange={e=>set("amount",e.target.value)} placeholder="0,00" style={IS}/></Fld>
+            <Fld label="Data *"><input type="date" value={form.date} onChange={e=>set("date",e.target.value)} style={IS}/></Fld>
+            <Fld label="Descrição" span><input value={form.description} onChange={e=>set("description",e.target.value)} placeholder="Detalhes do custo..." style={IS}/></Fld>
+          </div>
+          <FA onSave={save} onCancel={reset} saveColor="#dc2626" loading={saving}/>
+        </FC>
+      )}
+      <div style={{background:"var(--bg-card)",borderRadius:14,border:"1px solid var(--border)",overflow:"auto"}}>
+        <table style={{minWidth:800}}>
+          <thead><tr style={{background:"var(--bg-card2)"}}>
+            {["Categoria","Tipo","Descrição","Data","Valor","Inserido por","Ações"].map(h=>(
+              <th key={h} style={{padding:"11px 12px",fontSize:10,fontWeight:700,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:.5,borderBottom:"1px solid var(--border)"}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {sorted.length===0&&<tr><td colSpan={7} style={{padding:32,textAlign:"center",color:"var(--text-hint)",fontSize:13}}>Nenhum custo cadastrado.</td></tr>}
+            {sorted.map((item,i)=>(
+              <tr key={item.id} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"var(--bg-table-odd)":"var(--bg-table-even)"}}>
+                <td style={{padding:"11px 12px",fontSize:13,fontWeight:700}}>{item.category}</td>
+                <td style={{padding:"11px 12px"}}><Pill color={EXP_CLR[item.type]} bg={EXP_BG[item.type]}>{EXP_TYPES[item.type]}</Pill></td>
+                <td style={{padding:"11px 12px",fontSize:12,color:"var(--text-muted)"}}>{item.description||"—"}</td>
+                <td style={{padding:"11px 12px",fontSize:12,color:"var(--text-muted)",whiteSpace:"nowrap"}}>{fmtDate(item.date)}</td>
+                <td style={{padding:"11px 12px",fontSize:13,fontWeight:800,color:"#dc2626",whiteSpace:"nowrap"}}>{fmt(item.amount)}</td>
+                <td style={{padding:"11px 12px",fontSize:11,color:"var(--text-muted)"}}>{item.createdBy||"—"}</td>
+                <td style={{padding:"11px 12px"}}><div style={{display:"flex",gap:6}}>
+                  {canEdit&&!isReadOnly&&<SBtn color="#059669" bg="#ecfdf5" bdr="#bbf7d0" onClick={()=>startEdit(item)}>Editar</SBtn>}
+                  {canDelete&&!isReadOnly&&<SBtn color="#dc2626" bg="#fef2f2" bdr="#fecaca" onClick={()=>del(item.id)}>Excluir</SBtn>}
+                  {isReadOnly&&<span style={{fontSize:11,color:"var(--text-hint)"}} style={{fontSize:11,color:"var(--text-muted)"}}>somente leitura</span>}
+                </div></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  LOG PAGE
+// ════════════════════════════════════════════════════════════════
+const LOG_CLR={INSERIR_ENTRADA:"#059669",INSERIR_ENTRADA_PENDENTE:"#d97706",
+  EDITAR_ENTRADA:"#0d9488",EXCLUIR_ENTRADA:"#dc2626",APROVAR_ENTRADA:"#059669",REJEITAR_ENTRADA:"#dc2626",
+  INSERIR_CUSTO:"#7c3aed",EDITAR_CUSTO:"#0d9488",EXCLUIR_CUSTO:"#dc2626",
+  CRIAR_USUARIO:"#1d4ed8",EDITAR_USUARIO:"#0d9488",EXCLUIR_USUARIO:"#dc2626",
+  DESATIVAR_USUARIO:"#d97706",ATIVAR_USUARIO:"#059669",ATUALIZAR_CREDENCIAIS:"#7c3aed"};
+const LOG_ICO={INSERIR_ENTRADA:"💰",INSERIR_ENTRADA_PENDENTE:"⏳",
+  EDITAR_ENTRADA:"✏️",EXCLUIR_ENTRADA:"🗑️",APROVAR_ENTRADA:"✅",REJEITAR_ENTRADA:"❌",
+  INSERIR_CUSTO:"📤",EDITAR_CUSTO:"✏️",EXCLUIR_CUSTO:"🗑️",
+  CRIAR_USUARIO:"👤",EDITAR_USUARIO:"✏️",EXCLUIR_USUARIO:"🗑️",
+  DESATIVAR_USUARIO:"🔒",ATIVAR_USUARIO:"🔓",ATUALIZAR_CREDENCIAIS:"🔑"};
+
+function LogPage({db}){
+  const [search,setSearch]=useState("");
+  const [fAct,setFAct]=useState("todos");
+  const [fUser,setFUser]=useState("todos");
+  const logs=db.logs||[];
+  const actions=[...new Set(logs.map(l=>l.action))];
+  const users=[...new Set(logs.map(l=>l.userName))];
+  const filtered=logs.filter(l=>{
+    const ms=!search||(l.details?.toLowerCase().includes(search.toLowerCase())||l.userName?.toLowerCase().includes(search.toLowerCase())||l.action?.toLowerCase().includes(search.toLowerCase()));
+    return ms&&(fAct==="todos"||l.action===fAct)&&(fUser==="todos"||l.userName===fUser);
+  });
+  return(
+    <div className="page" style={{padding:28}}>
+      <PH title="Histórico de Log" subtitle="Registro completo de todas as ações no sistema">
+        <Pill color="#2563eb" bg="#eff6ff">{logs.length} registro{logs.length!==1?"s":""}</Pill>
+      </PH>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:20}}>
+        {[
+          {label:"Total de Ações",value:logs.length,color:"#2563eb"},
+          {label:"Entradas Inseridas",value:logs.filter(l=>["INSERIR_ENTRADA","INSERIR_ENTRADA_PENDENTE"].includes(l.action)).length,color:"#059669"},
+          {label:"Aprovações",value:logs.filter(l=>l.action==="APROVAR_ENTRADA").length,color:"#0d9488"},
+          {label:"Rejeições",value:logs.filter(l=>l.action==="REJEITAR_ENTRADA").length,color:"#dc2626"},
+        ].map((s,i)=>(
+          <div key={i} style={{background:"var(--bg-card)",borderRadius:12,padding:"14px 16px",border:"1px solid var(--border)"}}>
+            <div style={{fontSize:10,fontWeight:700,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:.5,marginBottom:6}}>{s.label}</div>
+            <div style={{fontSize:24,fontWeight:800,color:s.color}}>{s.value}</div>
+          </div>
+        ))}
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:12,marginBottom:16}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="🔍 Buscar por usuário, ação ou detalhes..." style={IS}/>
+        <select value={fAct} onChange={e=>setFAct(e.target.value)} style={{...IS,width:"auto"}}>
+          <option value="todos">Todas as ações</option>
+          {actions.map(a=><option key={a} value={a}>{LOG_ICO[a]||"•"} {a.replace(/_/g," ")}</option>)}
+        </select>
+        <select value={fUser} onChange={e=>setFUser(e.target.value)} style={{...IS,width:"auto"}}>
+          <option value="todos">Todos os usuários</option>
+          {users.map(u=><option key={u} value={u}>{u}</option>)}
+        </select>
+      </div>
+      <div style={{background:"var(--bg-card)",borderRadius:14,border:"1px solid var(--border)",overflow:"auto"}}>
+        <table style={{minWidth:800}}>
+          <thead><tr style={{background:"var(--bg-card2)"}}>
+            {["Data/Hora","Usuário","Perfil","Ação","Detalhes"].map(h=>(
+              <th key={h} style={{padding:"11px 14px",fontSize:10,fontWeight:700,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:.5,borderBottom:"1px solid var(--border)"}}>{h}</th>
+            ))}
+          </tr></thead>
+          <tbody>
+            {filtered.length===0&&<tr><td colSpan={5} style={{padding:40,textAlign:"center",color:"var(--text-hint)",fontSize:13}}>
+              {logs.length===0?"Nenhuma ação registrada ainda.":"Nenhum resultado para os filtros."}
+            </td></tr>}
+            {filtered.map((log,i)=>{const clr=LOG_CLR[log.action]||"#64748b";const ico=LOG_ICO[log.action]||"•";return(
+              <tr key={log.id||i} style={{borderBottom:"1px solid var(--border)",background:i%2===0?"var(--bg-table-odd)":"var(--bg-table-even)"}}>
+                <td style={{padding:"10px 14px",fontSize:11,color:"var(--text-muted)",whiteSpace:"nowrap"}}>{fmtDT(log.timestamp)}</td>
+                <td style={{padding:"10px 14px"}}><div style={{fontSize:12,fontWeight:700,color:"var(--text-primary)"}}>{log.userName}</div></td>
+                <td style={{padding:"10px 14px"}}><Pill color={ROLE_CLR[log.userRole]||"#64748b"} bg={(ROLE_CLR[log.userRole]||"#64748b")+"22"}>{ROLE_LABEL[log.userRole]||log.userRole}</Pill></td>
+                <td style={{padding:"10px 14px"}}><span style={{display:"inline-flex",alignItems:"center",gap:6,padding:"4px 10px",borderRadius:7,background:clr+"15",color:clr,fontSize:11,fontWeight:700,whiteSpace:"nowrap"}}>{ico} {log.action.replace(/_/g," ")}</span></td>
+                <td style={{padding:"10px 14px",fontSize:12,color:"var(--text-secondary)"}}>{log.details}</td>
+              </tr>);
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  USERS PAGE
+// ════════════════════════════════════════════════════════════════
+const PERMS=[["createIncome","Criar Entradas"],["editIncome","Editar Entradas"],["deleteIncome","Excluir Entradas"],
+  ["createExpense","Criar Custos"],["editExpense","Editar Custos"],["deleteExpense","Excluir Custos"]];
+
+function UsersPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
+  const blankP=Object.fromEntries(PERMS.map(([k])=>[k,false]));
+  const blank={name:"",email:"",password:"",role:"editor",active:true,perms:{...blankP}};
+  const [showForm,setShowForm]=useState(false);
+  const [editId,setEditId]=useState(null);
+  const [form,setForm]=useState(blank);
+  const [saving,setSaving]=useState(false);
+  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const setP=(k,v)=>setForm(f=>({...f,perms:{...f.perms,[k]:v}}));
+  const reset=()=>{setForm(blank);setEditId(null);setShowForm(false)};
+
+  const save=async()=>{
+    if(!form.name||!form.email||(!editId&&!form.password)){toast("Preencha todos os campos obrigatórios","error");return}
+    if((db.users||[]).find(u=>u.email.toLowerCase()===form.email.toLowerCase()&&u.id!==editId)){toast("Usuário/e-mail já em uso","error");return}
+    setSaving(true);
+    const id=editId||"u"+uid();
+    const existing=editId?(db.users||[]).find(u=>u.id===editId)||{}:{};
+    const newUser={...existing,...form,id,password:form.password||existing.password,createdAt:existing.createdAt||nowISO()};
+    const newDb={...db,users:editId?(db.users||[]).map(u=>u.id===editId?newUser:u):[...(db.users||[]),newUser]};
+    await updateDb(newDb,fbReady?[{type:"set",col:COL.users,id,data:newUser}]:[]);
+    addLog(editId?"EDITAR_USUARIO":"CRIAR_USUARIO",`${editId?"Editou":"Criou"} usuário: ${form.name} (${ROLE_LABEL[form.role]})`,id);
+    toast(editId?"Usuário atualizado!":"Usuário criado!");
+    setSaving(false);reset();
+  };
+
+  const toggleActive=async id=>{
+    const u=(db.users||[]).find(u=>u.id===id);
+    const upd={...u,active:!u.active};
+    const newDb={...db,users:(db.users||[]).map(x=>x.id===id?upd:x)};
+    await updateDb(newDb,fbReady?[{type:"set",col:COL.users,id,data:upd}]:[]);
+    addLog(u.active?"DESATIVAR_USUARIO":"ATIVAR_USUARIO",`${u.active?"Desativou":"Ativou"} usuário: ${u.name}`,id);
+  };
+
+  const del=async id=>{
+    if(id==="admin"){toast("Não é possível excluir o administrador","error");return}
+    const u=(db.users||[]).find(u=>u.id===id);
+    const ok=await showConfirm(`Excluir permanentemente "${u?.name}"?`);
+    if(!ok)return;
+    const newDb={...db,users:(db.users||[]).filter(u=>u.id!==id)};
+    await updateDb(newDb,fbReady?[{type:"delete",col:COL.users,id}]:[]);
+    addLog("EXCLUIR_USUARIO",`Excluiu usuário: ${u?.name} (${ROLE_LABEL[u?.role]})`,id);
+    toast("Usuário excluído","warning");
+  };
+
+  const startEdit=u=>{
+    setEditId(u.id);
+    setForm({name:u.name,email:u.email,password:"",role:u.role,active:u.active,perms:{...blankP,...(u.perms||{})}});
+    setShowForm(true);setTimeout(()=>window.scrollTo({top:0,behavior:"smooth"}),50);
+  };
+
+  return(
+    <div className="page" style={{padding:28}}>
+      <PH title="Gerenciamento de Usuários" subtitle="Controle de acesso e permissões">
+        <Btn color="#7c3aed" onClick={()=>setShowForm(true)}>+ Novo Usuário</Btn>
+      </PH>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:10,marginBottom:20}}>
+        {Object.entries(ROLE_LABEL).map(([role,label])=>(
+          <div key={role} style={{background:"var(--bg-card)",borderRadius:10,padding:"12px 14px",border:"1px solid var(--border)",borderLeft:`4px solid ${ROLE_CLR[role]}`}}>
+            <div style={{fontSize:12,fontWeight:800,color:ROLE_CLR[role],marginBottom:4}}>{label}</div>
+            <div style={{fontSize:10,color:"var(--text-muted)",lineHeight:1.5}}>{ROLE_DESC[role]}</div>
+          </div>
+        ))}
+      </div>
+      {showForm&&(
+        <FC title={editId?"Editar Usuário":"Novo Usuário"} onClose={reset}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
+            <Fld label="Nome completo *"><input value={form.name} onChange={e=>set("name",e.target.value)} placeholder="Nome do usuário" style={IS}/></Fld>
+            <Fld label="Usuário / E-mail *"><input value={form.email} onChange={e=>set("email",e.target.value)} placeholder="usuario" style={IS}/></Fld>
+            <Fld label={editId?"Nova senha (opcional)":"Senha *"}><input type="password" value={form.password} onChange={e=>set("password",e.target.value)} placeholder="••••••••" style={IS}/></Fld>
+            <Fld label="Perfil *"><select value={form.role} onChange={e=>set("role",e.target.value)} style={IS}>
+              <option value="gestor">Gestor — operações financeiras completas</option>
+              <option value="editor">Editor — permissões específicas</option>
+              <option value="auditor">Auditor — somente leitura + logs</option>
+              <option value="agente">Agente — insere entradas (requer aprovação)</option>
+            </select></Fld>
+          </div>
+          {form.role==="editor"&&<div style={{marginBottom:20}}>
+            <label style={{fontSize:12,fontWeight:700,color:"var(--text-secondary)",display:"block",marginBottom:10}}>Permissões do Editor</label>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
+              {PERMS.map(([k,label])=>(
+                <label key={k} style={{display:"flex",alignItems:"center",gap:8,fontSize:12,color:"var(--text-secondary)",cursor:"pointer",
+                  padding:"9px 12px",border:`1px solid ${form.perms[k]?"#1e3a8a":"var(--border-input)"}`,borderRadius:9,background:form.perms[k]?"#0d1f3c":"var(--bg-card2)"}}>
+                  <input type="checkbox" checked={!!form.perms[k]} onChange={e=>setP(k,e.target.checked)}/>{label}
+                </label>
+              ))}
+            </div>
+          </div>}
+          <FA onSave={save} onCancel={reset} saveColor="#7c3aed" loading={saving}/>
+        </FC>
+      )}
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {(db.users||[]).map(u=>(
+          <div key={u.id} style={{background:"var(--bg-card)",borderRadius:12,padding:"16px 20px",border:"1px solid var(--border)",
+            display:"flex",justifyContent:"space-between",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{width:44,height:44,background:ROLE_CLR[u.role]+"22",borderRadius:"50%",
+                display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:800,color:ROLE_CLR[u.role],flexShrink:0}}>
+                {u.name.charAt(0).toUpperCase()}
+              </div>
+              <div>
+                <div style={{fontWeight:700,fontSize:14,color:"var(--text-primary)"}}>{u.name}</div>
+                <div style={{fontSize:12,color:"var(--text-muted)"}}>{u.email!==u.name?u.email:""}</div>
+                <div style={{marginTop:4,display:"flex",gap:6,flexWrap:"wrap"}}>
+                  <Pill color={ROLE_CLR[u.role]} bg={ROLE_CLR[u.role]+"22"}>{ROLE_LABEL[u.role]}</Pill>
+                  <Pill color={u.active?"#059669":"#94a3b8"} bg={u.active?"#ecfdf5":"#f1f5f9"}>{u.active?"Ativo":"Inativo"}</Pill>
+                </div>
+              </div>
+            </div>
+            {u.id!=="admin"?(
+              <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+                <SBtn color="#475569" bg="#f8fafc" bdr="#e2e8f0" onClick={()=>toggleActive(u.id)}>{u.active?"Desativar":"Ativar"}</SBtn>
+                <SBtn color="#1d4ed8" bg="#eff6ff" bdr="#bfdbfe" onClick={()=>startEdit(u)}>Editar</SBtn>
+                <SBtn color="#dc2626" bg="#fef2f2" bdr="#fecaca" onClick={()=>del(u.id)}>Excluir</SBtn>
+              </div>
+            ):<span style={{fontSize:11,color:"var(--text-hint)",fontStyle:"italic"}}>Conta protegida</span>}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  PROFILE PAGE
+// ════════════════════════════════════════════════════════════════
+function ProfilePage({user,db,updateDb,setUser,toast,addLog,fbReady}){
+  const isAdmin=user.id==="admin";
+  const [cred,setCred]=useState({login:user.email,newPw:"",confirmPw:"",curPw:""});
+  const [showCred,setShowCred]=useState(false);
+  const [saving,setSaving]=useState(false);
+  const setC=(k,v)=>setCred(f=>({...f,[k]:v}));
+
+  const saveCreds=async()=>{
+    if(!cred.login.trim()){toast("Nome de usuário vazio","error");return}
+    if(!cred.curPw){toast("Informe sua senha atual","error");return}
+    if(cred.curPw!==user.password){toast("Senha atual incorreta","error");return}
+    if(cred.newPw&&cred.newPw!==cred.confirmPw){toast("As senhas não coincidem","error");return}
+    setSaving(true);
+    const updated={...user,email:cred.login.trim(),name:cred.login.trim(),...(cred.newPw?{password:cred.newPw}:{})};
+    const newDb={...db,users:(db.users||[]).map(u=>u.id===user.id?updated:u)};
+    await updateDb(newDb,fbReady?[{type:"set",col:COL.users,id:user.id,data:updated}]:[]);
+    addLog("ATUALIZAR_CREDENCIAIS","Atualizou credenciais de acesso (usuário/senha)");
+    setUser(updated);
+    setCred({login:updated.email,newPw:"",confirmPw:"",curPw:""});
+    setShowCred(false);setSaving(false);
+    toast("Credenciais atualizadas!");
+  };
+
+  const permsActive=Object.entries(user.perms||{}).filter(([,v])=>v).map(([k])=>k);
+
+  return(
+    <div className="page" style={{padding:28,maxWidth:620}}>
+      <PH title="Meu Perfil" subtitle="Informações da sua conta"/>
+      <div style={{background:"var(--bg-card)",borderRadius:14,padding:24,border:"1px solid var(--border)",marginBottom:20}}>
+        <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:20}}>
+          <div style={{width:56,height:56,background:`linear-gradient(135deg,${ROLE_CLR[user.role]},#0f172a)`,
+            borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,color:"#fff",fontWeight:800,flexShrink:0}}>
+            {user.name.charAt(0).toUpperCase()}
+          </div>
+          <div>
+            <div style={{fontSize:18,fontWeight:800,color:"var(--text-primary)"}}>{user.name}</div>
+            <div style={{fontSize:13,color:"var(--text-muted)",marginTop:2}}>Login: <strong>{user.email}</strong></div>
+            <span style={{display:"inline-block",marginTop:6,padding:"3px 10px",background:ROLE_CLR[user.role]+"22",color:ROLE_CLR[user.role],borderRadius:6,fontSize:11,fontWeight:700}}>{ROLE_LABEL[user.role]}</span>
+          </div>
+        </div>
+        <div style={{background:"var(--bg-card2)",borderRadius:10,padding:"14px 16px",fontSize:13,color:"var(--text-muted)",lineHeight:1.7}}>{ROLE_DESC[user.role]}</div>
+        {user.role==="editor"&&permsActive.length>0&&(
+          <div style={{marginTop:16}}>
+            <div style={{fontSize:12,fontWeight:700,color:"var(--text-secondary)",marginBottom:8}}>Permissões ativas:</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>{permsActive.map(k=><Pill key={k} color="#1d4ed8" bg="#eff6ff">{k}</Pill>)}</div>
+          </div>
+        )}
+      </div>
+      {isAdmin&&(
+        <div style={{background:"var(--bg-card)",borderRadius:14,border:"1px solid var(--border)",overflow:"hidden",marginBottom:20}}>
+          <button onClick={()=>setShowCred(s=>!s)}
+            style={{width:"100%",display:"flex",justifyContent:"space-between",alignItems:"center",
+              padding:"18px 22px",background:"none",border:"none",cursor:"pointer",borderBottom:showCred?"1px solid #e2e8f0":"none"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:20}}>🔐</span>
+              <div style={{textAlign:"left"}}>
+                <div style={{fontSize:14,fontWeight:700,color:"var(--text-primary)"}}>Alterar Credenciais de Acesso</div>
+                <div style={{fontSize:12,color:"var(--text-muted)",marginTop:2}}>Exclusivo para o administrador</div>
+              </div>
+            </div>
+            <span style={{fontSize:20,color:"var(--text-hint)",transform:showCred?"rotate(180deg)":"none",transition:"transform .2s"}}>⌄</span>
+          </button>
+          {showCred&&<div style={{padding:"22px 22px 24px",animation:"fadeIn .2s ease"}}>
+            <div style={{background:"#1a1200",border:"1px solid #78500a",borderRadius:10,padding:"12px 16px",fontSize:12,color:"#fbbf24",marginBottom:20,lineHeight:1.6}}>
+              ⚠️ <strong>Atenção:</strong> Anote as novas credenciais antes de salvar.{fbReady&&" A atualização será salva no Firebase."}
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              <Fld label="Senha atual (obrigatória) *"><input type="password" value={cred.curPw} onChange={e=>setC("curPw",e.target.value)} placeholder="Senha atual" style={IS}/></Fld>
+              <div style={{borderTop:"1px dashed var(--border)",paddingTop:14}}>
+                <div style={{fontSize:12,fontWeight:700,color:"var(--text-secondary)",marginBottom:12}}>Novos dados (apenas o que deseja alterar)</div>
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  <Fld label="Novo nome de usuário"><input value={cred.login} onChange={e=>setC("login",e.target.value)} placeholder="Nome de usuário" style={IS}/></Fld>
+                  <Fld label="Nova senha"><input type="password" value={cred.newPw} onChange={e=>setC("newPw",e.target.value)} placeholder="Deixe em branco para não alterar" style={IS}/></Fld>
+                  {cred.newPw&&<Fld label="Confirmar nova senha"><input type="password" value={cred.confirmPw} onChange={e=>setC("confirmPw",e.target.value)} placeholder="Repita a senha" style={IS}/></Fld>}
+                </div>
+              </div>
+              <FA onSave={saveCreds} onCancel={()=>{setShowCred(false);setCred({login:user.email,newPw:"",confirmPw:"",curPw:""})}} loading={saving} saveLabel="Salvar credenciais"/>
+            </div>
+          </div>}
+        </div>
+      )}
+      {!isAdmin&&<div style={{background:"var(--bg-card2)",borderRadius:14,padding:18,border:"1px solid var(--border)",fontSize:13,color:"var(--text-muted)",display:"flex",alignItems:"center",gap:10}}>
+        <span style={{fontSize:20}}>🔒</span>
+        <span>A alteração de credenciais é exclusiva do administrador do sistema.</span>
+      </div>}
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+//  RENDER
+// ════════════════════════════════════════════════════════════════
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
