@@ -702,25 +702,62 @@ function calcEntryCusto(h){
   return g*(avgPricePerKg/1000);
 }
 
+// Returns year/month {y,m} for a history entry or active pedido task
+// Priority: dataPedido (user-set) > completedAt (when marked done) > createdAt
+function entryMonth(entry){
+  if(entry.dataPedido){
+    // dataPedido is 'YYYY-MM-DD' string
+    const parts=entry.dataPedido.split('-');
+    if(parts.length===3) return{y:parseInt(parts[0]),m:parseInt(parts[1])-1};
+  }
+  // fallback to completedAt timestamp
+  const d=new Date(entry.completedAt||Date.now());
+  return{y:d.getFullYear(),m:d.getMonth()};
+}
+
 function getVendasData(months){
-  const now=new Date();const labels=[];const pedidos=[];const receita=[];const custoArr=[];const lucroArr=[];
+  const now=new Date();
+  const labels=[];const pedidosCount=[];const receita=[];const custoArr=[];const lucroArr=[];
+  const emAbertoCount=[];
+
+  // Combine: history (concluded) + active pedidos tab tasks (in progress)
+  const activePedidos=(state.tabs.find(t=>t.id==='pedidos')?.tasks||[]).map(t=>({
+    // shape like a history entry for unified processing
+    dataPedido:t.dataPedido||'',
+    completedAt:null,
+    valorPago:t.valorPago||'',
+    gramasGastas:t.gramasGastas||'',
+    custoPorGrama:t.custoPorGrama||0,
+    tag:'pedidos',
+    _active:true
+  }));
+  const historyPedidos=state.history.filter(h=>h.tag==='pedidos');
+  const allPedidos=[...historyPedidos,...activePedidos];
+
   for(let i=months-1;i>=0;i--){
     const d=new Date(now.getFullYear(),now.getMonth()-i,1);
     const label=d.toLocaleDateString('pt-BR',{month:'short',year:'2-digit'});
     labels.push(label);
-    const monthEntries=state.history.filter(h=>{
-      const hd=new Date(h.completedAt);
-      return hd.getFullYear()===d.getFullYear()&&hd.getMonth()===d.getMonth()&&h.tag==='pedidos';
+
+    const inMonth=allPedidos.filter(h=>{
+      const{y,m}=entryMonth(h);
+      return y===d.getFullYear()&&m===d.getMonth();
     });
-    pedidos.push(monthEntries.length);
-    const r=monthEntries.reduce((s,h)=>s+(parseFloat(h.valorPago)||0),0);
-    // Use proper custo calculation per entry
-    const c=monthEntries.reduce((s,h)=>s+calcEntryCusto(h),0);
+
+    const concluded=inMonth.filter(h=>!h._active);
+    const active=inMonth.filter(h=>h._active);
+
+    pedidosCount.push(concluded.length);
+    emAbertoCount.push(active.length);
+
+    // Revenue and profit only from concluded pedidos
+    const r=concluded.reduce((s,h)=>s+(parseFloat(h.valorPago)||0),0);
+    const c=concluded.reduce((s,h)=>s+calcEntryCusto(h),0);
     receita.push(parseFloat(r.toFixed(2)));
     custoArr.push(parseFloat(c.toFixed(2)));
     lucroArr.push(parseFloat((r-c).toFixed(2)));
   }
-  return{labels,pedidos,receita,custo:custoArr,lucro:lucroArr};
+  return{labels,pedidos:pedidosCount,emAberto:emAbertoCount,receita,custo:custoArr,lucro:lucroArr};
 }
 function buildVendasHTML(){
   return `<div class="page-title">📊 Vendas</div>
@@ -740,13 +777,15 @@ function bindVendasEvents(){
   });
   const data=getVendasData(vendasPeriod);
   const totalPed=data.pedidos.reduce((a,b)=>a+b,0);
+  const totalEmAberto=data.emAberto.reduce((a,b)=>a+b,0);
   const totalRec=data.receita.reduce((a,b)=>a+b,0);
   const totalCusto=data.custo.reduce((a,b)=>a+b,0);
   const totalLucro=data.lucro.reduce((a,b)=>a+b,0);
   const margemMedia=totalRec>0?((totalLucro/totalRec)*100).toFixed(1):0;
 
   document.getElementById('statsGrid').innerHTML=`
-    <div class="stat-card"><div class="stat-label">Pedidos no período</div><div class="stat-val orange">${totalPed}</div></div>
+    <div class="stat-card"><div class="stat-label">Concluídos</div><div class="stat-val green">${totalPed}</div></div>
+    <div class="stat-card"><div class="stat-label">Em aberto</div><div class="stat-val purple">${totalEmAberto}</div></div>
     <div class="stat-card"><div class="stat-label">Receita total</div><div class="stat-val green">${fmtR(totalRec)}</div></div>
     <div class="stat-card"><div class="stat-label">Custo filamento</div><div class="stat-val blue">${fmtR(totalCusto)}</div></div>
     <div class="stat-card"><div class="stat-label">Lucro líquido</div><div class="stat-val purple">${fmtR(totalLucro)}</div></div>
@@ -821,25 +860,54 @@ function bindVendasEvents(){
     }
   });
 
-  // Chart 2: Quantidade de pedidos
+  // Chart 2: Quantidade de pedidos — concluídos (verde) + em aberto (roxo) empilhados
   const ctx2=document.getElementById('chartPedidos').getContext('2d');
   chartInstances.pedidos=new Chart(ctx2,{
     type:'bar',
     data:{
       labels:data.labels,
-      datasets:[{
-        label:'Pedidos concluídos',
-        data:data.pedidos,
-        backgroundColor:'rgba(240,160,96,0.35)',
-        borderColor:'#f0a060',
-        borderWidth:1.5,
-        borderRadius:4
-      }]
+      datasets:[
+        {
+          label:'Concluídos',
+          data:data.pedidos,
+          backgroundColor:'rgba(200,240,96,0.4)',
+          borderColor:'#c8f060',
+          borderWidth:1.5,
+          borderRadius:4,
+          stack:'s'
+        },
+        {
+          label:'Em aberto',
+          data:data.emAberto,
+          backgroundColor:'rgba(160,96,240,0.3)',
+          borderColor:'#a060f0',
+          borderWidth:1.5,
+          borderRadius:4,
+          stack:'s'
+        }
+      ]
     },
     options:{
       ...chartDefaults,
-      plugins:{...chartDefaults.plugins,tooltip:{...chartDefaults.plugins.tooltip,callbacks:{label:ctx=>` ${ctx.dataset.label}: ${ctx.parsed.y} pedido${ctx.parsed.y!==1?'s':''}`}}},
-      scales:{...chartDefaults.scales,y:{...chartDefaults.scales.y,ticks:{color:'#5c5b6e',font:{size:10},stepSize:1,callback:v=>Number.isInteger(v)?v:''},beginAtZero:true}}
+      plugins:{
+        ...chartDefaults.plugins,
+        tooltip:{
+          ...chartDefaults.plugins.tooltip,
+          callbacks:{
+            label:ctx=>` ${ctx.dataset.label}: ${ctx.parsed.y} pedido${ctx.parsed.y!==1?'s':''}`,
+            afterBody:items=>{
+              const idx=items[0].dataIndex;
+              const total=data.pedidos[idx]+data.emAberto[idx];
+              return total>0?[` Total: ${total} pedido${total!==1?'s':''}`]:[];
+            }
+          }
+        }
+      },
+      scales:{
+        ...chartDefaults.scales,
+        x:{...chartDefaults.scales.x,stacked:true},
+        y:{...chartDefaults.scales.y,stacked:true,ticks:{color:'#5c5b6e',font:{size:10},stepSize:1,callback:v=>Number.isInteger(v)?v:''},beginAtZero:true}
+      }
     }
   });
 
