@@ -661,7 +661,12 @@ function LoginPage({db,onLogin,toast}){
     if(!email||!pass){toast("Preencha usuário e senha","error");return}
     setLoading(true);
     setTimeout(()=>{
-      const u=(db.users||[]).find(u=>u.email.toLowerCase()===email.toLowerCase()&&u.password===pass&&u.active);
+      const q=email.toLowerCase().trim();
+      const u=(db.users||[]).find(u=>(
+        (u.username&&u.username.toLowerCase()===q)||
+        (u.email&&u.email.toLowerCase()===q)||
+        u.name.toLowerCase()===q
+      )&&u.password===pass&&u.active);
       if(u)onLogin(u);
       else{toast("Credenciais inválidas ou usuário inativo","error");setLoading(false)}
     },600);
@@ -683,7 +688,7 @@ function LoginPage({db,onLogin,toast}){
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <div>
             <label style={{fontSize:12,fontWeight:700,color:"var(--text-secondary)",display:"block",marginBottom:6}}>Usuário</label>
-            <input value={email} onChange={e=>setEmail(e.target.value)} type="text" placeholder="usuário ou e-mail"
+            <input value={email} onChange={e=>setEmail(e.target.value)} type="text" placeholder="@usuário ou e-mail"
               onKeyDown={e=>e.key==="Enter"&&handle()}
               style={{width:"100%",padding:"12px 14px",border:`1.5px solid ${email?"#1d4ed8":"#e5e7eb"}`,borderRadius:10,fontSize:14,outline:"none"}}/>
           </div>
@@ -786,25 +791,50 @@ function Sidebar({page,setPage,user,onLogout,canLog,canUsers,fbReady,syncing,onD
 //  DASHBOARD
 // ════════════════════════════════════════════════════════════════
 function DashboardPage({db,toast,fbReady}){
-  const approved=(db.income||[]).filter(i=>i.status==="aprovado");
+  const curY=new Date().getFullYear();
+  const [fYear,setFYear]=useState(String(curY));
+  const [fMonth,setFMonth]=useState("todos");
+  const [fUser,setFUser]=useState("todos");
+
+  const yearOpts=[...new Set([...(db.income||[]),...(db.expenses||[])].map(x=>new Date(x.date).getFullYear()))].sort((a,b)=>b-a);
+  if(!yearOpts.includes(curY))yearOpts.unshift(curY);
+  const userOpts=[...new Set([...(db.income||[]).map(i=>i.createdBy),...(db.expenses||[]).map(e=>e.createdBy)].filter(Boolean))];
+
+  const filterItem=(item,hasUser=false)=>{
+    const d=new Date(item.date);
+    const yOk=fYear==="todos"||(d.getFullYear()===parseInt(fYear));
+    const mOk=fMonth==="todos"||(d.getMonth()===parseInt(fMonth));
+    const uOk=!hasUser||fUser==="todos"||(item.createdBy===fUser);
+    return yOk&&mOk&&uOk;
+  };
+
+  const approved=(db.income||[]).filter(i=>i.status==="aprovado"&&filterItem(i,true));
   const pending=(db.income||[]).filter(i=>i.status==="pendente");
+  const filteredExp=(db.expenses||[]).filter(e=>filterItem(e,true));
+
   const totalInc=approved.reduce((s,i)=>s+i.amount,0);
-  const totalExp=(db.expenses||[]).reduce((s,e)=>s+e.amount,0);
+  const totalExp=filteredExp.reduce((s,e)=>s+e.amount,0);
   const balance=totalInc-totalExp;
-  const months4=[1,2,3,4];
-  const monthly=months4.map(m=>({label:MONTHS[m-1],
-    inc:approved.reduce((s,i)=>new Date(i.date).getMonth()+1===m?s+i.amount:s,0),
-    exp:(db.expenses||[]).reduce((s,e)=>new Date(e.date).getMonth()+1===m?s+e.amount:s,0)}));
+
+  // Monthly chart: show months of selected year or all-year summary
+  const monthNums=fMonth==="todos"?[0,1,2,3,4,5,6,7,8,9,10,11]:[parseInt(fMonth)];
+  const monthly=(fMonth==="todos"?[0,1,2,3,4,5,6,7,8,9,10,11]:[parseInt(fMonth)]).map(m=>({
+    label:MONTHS[m],
+    inc:(db.income||[]).filter(i=>i.status==="aprovado"&&new Date(i.date).getMonth()===m&&(fYear==="todos"||new Date(i.date).getFullYear()===parseInt(fYear))&&(fUser==="todos"||i.createdBy===fUser)).reduce((s,i)=>s+i.amount,0),
+    exp:(db.expenses||[]).filter(e=>new Date(e.date).getMonth()===m&&(fYear==="todos"||new Date(e.date).getFullYear()===parseInt(fYear))&&(fUser==="todos"||e.createdBy===fUser)).reduce((s,e)=>s+e.amount,0),
+  }));
+
   const expByCat={};
-  (db.expenses||[]).forEach(e=>{expByCat[e.category]=(expByCat[e.category]||0)+e.amount});
+  filteredExp.forEach(e=>{expByCat[e.category]=(expByCat[e.category]||0)+e.amount});
   const topCats=Object.entries(expByCat).sort((a,b)=>b[1]-a[1]).slice(0,6);
   const expByType={fixo:0,variavel:0,imprevisto:0};
-  (db.expenses||[]).forEach(e=>{expByType[e.type]=(expByType[e.type]||0)+e.amount});
+  filteredExp.forEach(e=>{expByType[e.type]=(expByType[e.type]||0)+e.amount});
   const incByType={dizimo:0,oferta:0};
   approved.forEach(i=>{incByType[i.type]=(incByType[i.type]||0)+i.amount});
 
   const barRef=useRef();const barCh=useRef();
   const dRef=useRef();const dCh=useRef();
+
   useEffect(()=>{
     if(barRef.current){
       if(barCh.current)barCh.current.destroy();
@@ -813,7 +843,7 @@ function DashboardPage({db,toast,fbReady}){
           {label:"Entradas",data:monthly.map(m=>m.inc),backgroundColor:"#10b981",borderRadius:4,borderSkipped:false},
           {label:"Custos",data:monthly.map(m=>m.exp),backgroundColor:"#f43f5e",borderRadius:4,borderSkipped:false},
         ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}},
-          scales:{x:{grid:{display:false}},y:{grid:{color:"#f1f5f9"},ticks:{callback:v=>"R$"+v.toLocaleString("pt-BR")}}}}});
+          scales:{x:{grid:{display:false}},y:{grid:{color:"rgba(100,116,139,0.15)"},ticks:{callback:v=>"R$"+v.toLocaleString("pt-BR")}}}}});
     }
     if(dRef.current){
       if(dCh.current)dCh.current.destroy();
@@ -824,7 +854,7 @@ function DashboardPage({db,toast,fbReady}){
         options:{responsive:true,maintainAspectRatio:false,cutout:"65%",plugins:{legend:{display:false}}}});
     }
     return()=>{barCh.current?.destroy();dCh.current?.destroy()};
-  },[]);
+  },[fYear,fMonth,fUser]);
 
   const genXLS=()=>{
     const doIt=()=>{
@@ -873,12 +903,37 @@ function DashboardPage({db,toast,fbReady}){
           </button>
         </div>
       </PH>
+
+      {/* ── Filtros do painel ── */}
+      <div style={{display:"flex",gap:10,marginBottom:20,flexWrap:"wrap",alignItems:"center",
+        background:"var(--bg-card)",padding:"12px 16px",borderRadius:12,border:"1px solid var(--border)"}}>
+        <span style={{fontSize:12,fontWeight:700,color:"var(--text-muted)",marginRight:4}}>🔍 Filtros:</span>
+        <select value={fYear} onChange={e=>setFYear(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+          <option value="todos">Todos os anos</option>
+          {yearOpts.map(y=><option key={y} value={String(y)}>{y}</option>)}
+        </select>
+        <select value={fMonth} onChange={e=>setFMonth(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+          <option value="todos">Todos os meses</option>
+          {MONTHS.map((m,i)=><option key={i} value={String(i)}>{m}</option>)}
+        </select>
+        <select value={fUser} onChange={e=>setFUser(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+          <option value="todos">Todos os usuários</option>
+          {userOpts.map(u=><option key={u} value={u}>{u}</option>)}
+        </select>
+        {(fYear!==String(curY)||fMonth!=="todos"||fUser!=="todos")&&(
+          <button onClick={()=>{setFYear(String(curY));setFMonth("todos");setFUser("todos")}}
+            style={{padding:"6px 12px",background:"var(--bg-card2)",border:"1px solid var(--border)",
+              borderRadius:8,fontSize:11,color:"var(--text-muted)",cursor:"pointer",fontWeight:600}}>
+            ✕ Limpar
+          </button>
+        )}
+      </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:14,marginBottom:20}}>
         {[
           {label:"Total Arrecadado",value:fmt(totalInc),color:"#059669",bg:"#ecfdf5",icon:"📈"},
           {label:"Total de Custos",value:fmt(totalExp),color:"#dc2626",bg:"#fef2f2",icon:"📉"},
           {label:"Saldo em Caixa",value:fmt(balance),color:balance>=0?"#059669":"#dc2626",bg:balance>=0?"#ecfdf5":"#fef2f2",icon:"💼"},
-          {label:"Média Mensal",value:fmt(totalInc/4),color:"#7c3aed",bg:"#f5f3ff",icon:"📊"},
+          {label:"Média Mensal",value:fmt(totalInc/Math.max(monthly.filter(m=>m.inc>0).length,1)),color:"#7c3aed",bg:"#f5f3ff",icon:"📊"},
         ].map((k,i)=>(
           <div key={i} style={{background:"var(--bg-card)",borderRadius:14,padding:"18px 16px",border:"1px solid var(--border)",boxShadow:"0 1px 4px rgba(0,0,0,.05)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:10}}>
@@ -976,7 +1031,14 @@ function IncomePage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
   const [form,setForm]=useState(blank);
   const [recPrev,setRecPrev]=useState(null);
   const [filter,setFilter]=useState("todos");
+  const [fYear,setFYear]=useState("todos");
+  const [fMonth,setFMonth]=useState("todos");
+  const [fType,setFType]=useState("todos");
+  const [fUser2,setFUser2]=useState("todos");
   const [saving,setSaving]=useState(false);
+
+  const yearOpts=[...new Set((db.income||[]).map(i=>new Date(i.date).getFullYear()))].sort((a,b)=>b-a);
+  const userOpts=[...new Set((db.income||[]).map(i=>i.createdBy).filter(Boolean))];
   const fileRef=useRef();
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const reset=()=>{setForm(blank);setRecPrev(null);setEditing(null);setShowForm(false)};
@@ -1055,8 +1117,17 @@ function IncomePage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
   let displayed=[...(db.income||[])];
   if(filter==="pendente")displayed=pending;
   else if(filter==="aprovado")displayed=approved;
+  // Apply additional filters
+  displayed=displayed.filter(i=>{
+    const d=new Date(i.date);
+    return (fYear==="todos"||d.getFullYear()===parseInt(fYear))
+      &&(fMonth==="todos"||d.getMonth()===parseInt(fMonth))
+      &&(fType==="todos"||i.type===fType)
+      &&(fUser2==="todos"||i.createdBy===fUser2);
+  });
   displayed=displayed.sort((a,b)=>(b.createdAt||b.date).localeCompare(a.createdAt||a.date));
   if(isAgente)displayed=displayed.filter(i=>i.createdBy===user.name);
+  const hasActiveFilters=fYear!=="todos"||fMonth!=="todos"||fType!=="todos"||fUser2!=="todos";
 
   return(
     <div className="page" style={{padding:28}}>
@@ -1068,13 +1139,42 @@ function IncomePage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
         </div>
       </PH>
       {!isAgente&&!isReadOnly&&(
-        <div style={{display:"flex",gap:8,marginBottom:16}}>
+        <div style={{display:"flex",gap:8,marginBottom:12}}>
           {[["todos","Todas"],["aprovado","✅ Aprovadas"],["pendente","⏳ Pendentes"]].map(([v,l])=>(
             <button key={v} onClick={()=>setFilter(v)}
               style={{padding:"7px 16px",borderRadius:8,border:"1.5px solid",
                 borderColor:filter===v?"#1d4ed8":"var(--border)",background:filter===v?"#1d4ed8":"var(--bg-card)",
                 color:filter===v?"#fff":"var(--text-muted)",fontSize:12,fontWeight:600,cursor:"pointer"}}>{l}</button>
           ))}
+        </div>
+      )}
+
+      {/* ── Filtros avançados ── */}
+      {!isAgente&&(
+        <div style={{display:"flex",gap:10,marginBottom:18,flexWrap:"wrap",alignItems:"center",
+          background:"var(--bg-card)",padding:"10px 14px",borderRadius:12,border:"1px solid var(--border)"}}>
+          <span style={{fontSize:11,fontWeight:700,color:"var(--text-muted)"}}>🔍</span>
+          <select value={fYear} onChange={e=>setFYear(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todos os anos</option>
+            {yearOpts.map(y=><option key={y} value={String(y)}>{y}</option>)}
+          </select>
+          <select value={fMonth} onChange={e=>setFMonth(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todos os meses</option>
+            {MONTHS.map((m,i)=><option key={i} value={String(i)}>{m}</option>)}
+          </select>
+          <select value={fType} onChange={e=>setFType(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todos os tipos</option>
+            <option value="dizimo">Dízimo</option>
+            <option value="oferta">Oferta</option>
+          </select>
+          {userOpts.length>0&&<select value={fUser2} onChange={e=>setFUser2(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todos os usuários</option>
+            {userOpts.map(u=><option key={u} value={u}>{u}</option>)}
+          </select>}
+          {hasActiveFilters&&<button onClick={()=>{setFYear("todos");setFMonth("todos");setFType("todos");setFUser2("todos")}}
+            style={{padding:"6px 12px",background:"var(--bg-card2)",border:"1px solid var(--border)",
+              borderRadius:8,fontSize:11,color:"var(--text-muted)",cursor:"pointer",fontWeight:600}}>✕ Limpar</button>}
+          <span style={{marginLeft:"auto",fontSize:11,color:"var(--text-hint)"}}>{displayed.length} registro{displayed.length!==1?"s":""}</span>
         </div>
       )}
       {isAgente&&<div style={{background:"#0d1f3c",border:"1px solid #1e3a8a",borderRadius:12,padding:"14px 18px",marginBottom:20,fontSize:13,color:"#93c5fd"}}>
@@ -1153,6 +1253,15 @@ function ExpensesPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
   const [editing,setEditing]=useState(null);
   const [form,setForm]=useState(blank);
   const [saving,setSaving]=useState(false);
+  const [fYear,setFYear]=useState("todos");
+  const [fMonth,setFMonth]=useState("todos");
+  const [fType,setFType]=useState("todos");
+  const [fCat,setFCat]=useState("todos");
+  const [fUser2,setFUser2]=useState("todos");
+
+  const yearOpts=[...new Set((db.expenses||[]).map(e=>new Date(e.date).getFullYear()))].sort((a,b)=>b-a);
+  const catOpts=[...new Set((db.expenses||[]).map(e=>e.category))];
+  const userOpts=[...new Set((db.expenses||[]).map(e=>e.createdBy).filter(Boolean))];
   const set=(k,v)=>setForm(f=>({...f,[k]:v}));
   const reset=()=>{setForm(blank);setEditing(null);setShowForm(false)};
 
@@ -1197,7 +1306,16 @@ function ExpensesPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
   };
 
   const total=(db.expenses||[]).reduce((s,e)=>s+e.amount,0);
-  const sorted=[...(db.expenses||[])].sort((a,b)=>(b.createdAt||b.date).localeCompare(a.createdAt||a.date));
+  const sorted=[...(db.expenses||[])].filter(e=>{
+    const d=new Date(e.date);
+    return (fYear==="todos"||d.getFullYear()===parseInt(fYear))
+      &&(fMonth==="todos"||d.getMonth()===parseInt(fMonth))
+      &&(fType==="todos"||e.type===fType)
+      &&(fCat==="todos"||e.category===fCat)
+      &&(fUser2==="todos"||e.createdBy===fUser2);
+  }).sort((a,b)=>(b.createdAt||b.date).localeCompare(a.createdAt||a.date));
+  const filteredTotal=sorted.reduce((s,e)=>s+e.amount,0);
+  const hasActiveFilters=fYear!=="todos"||fMonth!=="todos"||fType!=="todos"||fCat!=="todos"||fUser2!=="todos";
 
   return(
     <div className="page" style={{padding:28}}>
@@ -1210,11 +1328,44 @@ function ExpensesPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
       {isReadOnly&&<div style={{background:"#0d1f3c",border:"1px solid #1e3a8a",borderRadius:12,padding:"12px 18px",marginBottom:20,fontSize:13,color:"#93c5fd"}}>
         🔒 Seu perfil permite somente visualizar os custos.
       </div>}
-      <div style={{display:"flex",gap:8,marginBottom:18,flexWrap:"wrap"}}>
+      <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
         {Object.entries(EXP_TYPES).map(([k,v])=>(
           <span key={k} style={{padding:"5px 13px",borderRadius:8,background:EXP_CLR[k]+"18",color:EXP_CLR[k],fontSize:11,fontWeight:700,border:`1px solid ${EXP_CLR[k]}35`}}>{v}</span>
         ))}
       </div>
+
+      {/* ── Filtros ── */}
+      {!isReadOnly&&(
+        <div style={{display:"flex",gap:10,marginBottom:18,flexWrap:"wrap",alignItems:"center",
+          background:"var(--bg-card)",padding:"10px 14px",borderRadius:12,border:"1px solid var(--border)"}}>
+          <span style={{fontSize:11,fontWeight:700,color:"var(--text-muted)"}}>🔍</span>
+          <select value={fYear} onChange={e=>setFYear(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todos os anos</option>
+            {yearOpts.map(y=><option key={y} value={String(y)}>{y}</option>)}
+          </select>
+          <select value={fMonth} onChange={e=>setFMonth(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todos os meses</option>
+            {MONTHS.map((m,i)=><option key={i} value={String(i)}>{m}</option>)}
+          </select>
+          <select value={fType} onChange={e=>setFType(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todos os tipos</option>
+            {Object.entries(EXP_TYPES).map(([k,v])=><option key={k} value={k}>{v}</option>)}
+          </select>
+          {catOpts.length>0&&<select value={fCat} onChange={e=>setFCat(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todas as categorias</option>
+            {catOpts.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>}
+          {userOpts.length>0&&<select value={fUser2} onChange={e=>setFUser2(e.target.value)} style={{...IS,width:"auto",padding:"6px 10px",fontSize:12}}>
+            <option value="todos">Todos os usuários</option>
+            {userOpts.map(u=><option key={u} value={u}>{u}</option>)}
+          </select>}
+          {hasActiveFilters&&<button onClick={()=>{setFYear("todos");setFMonth("todos");setFType("todos");setFCat("todos");setFUser2("todos")}}
+            style={{padding:"6px 12px",background:"var(--bg-card2)",border:"1px solid var(--border)",
+              borderRadius:8,fontSize:11,color:"var(--text-muted)",cursor:"pointer",fontWeight:600}}>✕ Limpar</button>}
+          {hasActiveFilters&&<Pill color="#dc2626" bg="#fef2f2">Filtrado: {fmt(filteredTotal)}</Pill>}
+          <span style={{marginLeft:"auto",fontSize:11,color:"var(--text-hint)"}}>{sorted.length} registro{sorted.length!==1?"s":""}</span>
+        </div>
+      )}
       {showForm&&(
         <FC title={editing?"Editar Custo":"Novo Custo"} onClose={reset}>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
@@ -1356,25 +1507,47 @@ const PERMS=[["createIncome","Criar Entradas"],["editIncome","Editar Entradas"],
 
 function UsersPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
   const blankP=Object.fromEntries(PERMS.map(([k])=>[k,false]));
-  const blank={name:"",email:"",password:"",role:"editor",active:true,perms:{...blankP}};
+  const blank={name:"",username:"",email:"",password:"",role:"editor",active:true,perms:{...blankP}};
   const [showForm,setShowForm]=useState(false);
   const [editId,setEditId]=useState(null);
   const [form,setForm]=useState(blank);
   const [saving,setSaving]=useState(false);
-  const set=(k,v)=>setForm(f=>({...f,[k]:v}));
+  const [fieldErrors,setFieldErrors]=useState({});
+  const set=(k,v)=>{setForm(f=>({...f,[k]:v}));setFieldErrors(e=>({...e,[k]:null}))};
   const setP=(k,v)=>setForm(f=>({...f,perms:{...f.perms,[k]:v}}));
-  const reset=()=>{setForm(blank);setEditId(null);setShowForm(false)};
+  const reset=()=>{setForm(blank);setEditId(null);setShowForm(false);setFieldErrors({})};
 
   const save=async()=>{
-    if(!form.name||!form.email||(!editId&&!form.password)){toast("Preencha todos os campos obrigatórios","error");return}
-    if((db.users||[]).find(u=>u.email.toLowerCase()===form.email.toLowerCase()&&u.id!==editId)){toast("Usuário/e-mail já em uso","error");return}
+    const errs={};
+    if(!form.name.trim()) errs.name="Nome obrigatório";
+    if(!form.username.trim()) errs.username="Nome de usuário obrigatório";
+    else if(!/^[a-zA-Z0-9._@-]+$/.test(form.username)) errs.username="Use apenas letras, números e . _ @ -";
+    if(!editId&&!form.password) errs.password="Senha obrigatória";
+
+    const allUsers=db.users||[];
+    // username conflict
+    if(form.username.trim()&&allUsers.find(u=>u.username&&u.username.toLowerCase()===form.username.toLowerCase()&&u.id!==editId))
+      errs.username="Este nome de usuário já está em uso";
+    // email conflict (optional field)
+    if(form.email.trim()&&allUsers.find(u=>u.email&&u.email.toLowerCase()===form.email.toLowerCase()&&u.id!==editId))
+      errs.email="Este e-mail já está cadastrado";
+
+    if(Object.keys(errs).length>0){setFieldErrors(errs);toast("Corrija os erros antes de salvar","error");return}
+
     setSaving(true);
     const id=editId||"u"+uid();
-    const existing=editId?(db.users||[]).find(u=>u.id===editId)||{}:{};
-    const newUser={...existing,...form,id,password:form.password||existing.password,createdAt:existing.createdAt||nowISO()};
-    const newDb={...db,users:editId?(db.users||[]).map(u=>u.id===editId?newUser:u):[...(db.users||[]),newUser]};
+    const existing=editId?allUsers.find(u=>u.id===editId)||{}:{};
+    const newUser={...existing,...form,
+      username:form.username.trim(),
+      name:form.name.trim(),
+      email:form.email.trim(),
+      id,
+      password:form.password||existing.password,
+      createdAt:existing.createdAt||nowISO()
+    };
+    const newDb={...db,users:editId?allUsers.map(u=>u.id===editId?newUser:u):[...allUsers,newUser]};
     await updateDb(newDb,fbReady?[{type:"set",col:COL.users,id,data:newUser}]:[]);
-    addLog(editId?"EDITAR_USUARIO":"CRIAR_USUARIO",`${editId?"Editou":"Criou"} usuário: ${form.name} (${ROLE_LABEL[form.role]})`,id);
+    addLog(editId?"EDITAR_USUARIO":"CRIAR_USUARIO",`${editId?"Editou":"Criou"} usuário: ${form.name} (@${form.username}) — ${ROLE_LABEL[form.role]}`,id);
     toast(editId?"Usuário atualizado!":"Usuário criado!");
     setSaving(false);reset();
   };
@@ -1400,7 +1573,8 @@ function UsersPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
 
   const startEdit=u=>{
     setEditId(u.id);
-    setForm({name:u.name,email:u.email,password:"",role:u.role,active:u.active,perms:{...blankP,...(u.perms||{})}});
+    setForm({name:u.name,username:u.username||"",email:u.email||"",password:"",role:u.role,active:u.active,perms:{...blankP,...(u.perms||{})}});
+    setFieldErrors({});
     setShowForm(true);setTimeout(()=>window.scrollTo({top:0,behavior:"smooth"}),50);
   };
 
@@ -1420,9 +1594,23 @@ function UsersPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
       {showForm&&(
         <FC title={editId?"Editar Usuário":"Novo Usuário"} onClose={reset}>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14,marginBottom:16}}>
-            <Fld label="Nome completo *"><input value={form.name} onChange={e=>set("name",e.target.value)} placeholder="Nome do usuário" style={IS}/></Fld>
-            <Fld label="Usuário / E-mail *"><input value={form.email} onChange={e=>set("email",e.target.value)} placeholder="usuario" style={IS}/></Fld>
-            <Fld label={editId?"Nova senha (opcional)":"Senha *"}><input type="password" value={form.password} onChange={e=>set("password",e.target.value)} placeholder="••••••••" style={IS}/></Fld>
+            <Fld label="Nome completo *">
+              <input value={form.name} onChange={e=>set("name",e.target.value)} placeholder="Nome do usuário" style={{...IS,borderColor:fieldErrors.name?"#dc2626":"var(--border-input)"}}/>
+              {fieldErrors.name&&<span style={{fontSize:11,color:"#dc2626",marginTop:4,display:"block"}}>{fieldErrors.name}</span>}
+            </Fld>
+            <Fld label="Nome de usuário (login) *">
+              <input value={form.username} onChange={e=>set("username",e.target.value)} placeholder="@usuario" style={{...IS,borderColor:fieldErrors.username?"#dc2626":"var(--border-input)"}}/>
+              {fieldErrors.username?<span style={{fontSize:11,color:"#dc2626",marginTop:4,display:"block"}}>{fieldErrors.username}</span>
+                :<span style={{fontSize:10,color:"var(--text-hint)",marginTop:3,display:"block"}}>Usado para fazer login. Sem espaços.</span>}
+            </Fld>
+            <Fld label="E-mail (opcional)">
+              <input type="email" value={form.email} onChange={e=>set("email",e.target.value)} placeholder="usuario@email.com" style={{...IS,borderColor:fieldErrors.email?"#dc2626":"var(--border-input)"}}/>
+              {fieldErrors.email&&<span style={{fontSize:11,color:"#dc2626",marginTop:4,display:"block"}}>{fieldErrors.email}</span>}
+            </Fld>
+            <Fld label={editId?"Nova senha (opcional)":"Senha *"}>
+              <input type="password" value={form.password} onChange={e=>set("password",e.target.value)} placeholder="••••••••" style={{...IS,borderColor:fieldErrors.password?"#dc2626":"var(--border-input)"}}/>
+              {fieldErrors.password&&<span style={{fontSize:11,color:"#dc2626",marginTop:4,display:"block"}}>{fieldErrors.password}</span>}
+            </Fld>
             <Fld label="Perfil *"><select value={form.role} onChange={e=>set("role",e.target.value)} style={IS}>
               <option value="gestor">Gestor — operações financeiras completas</option>
               <option value="editor">Editor — permissões específicas</option>
@@ -1455,7 +1643,7 @@ function UsersPage({db,updateDb,user,toast,showConfirm,addLog,fbReady}){
               </div>
               <div>
                 <div style={{fontWeight:700,fontSize:14,color:"var(--text-primary)"}}>{u.name}</div>
-                <div style={{fontSize:12,color:"var(--text-muted)"}}>{u.email!==u.name?u.email:""}</div>
+                <div style={{fontSize:12,color:"var(--text-muted)"}}>{u.username?`@${u.username}`:""}{u.email&&u.email!==u.name?` · ${u.email}`:""}</div>
                 <div style={{marginTop:4,display:"flex",gap:6,flexWrap:"wrap"}}>
                   <Pill color={ROLE_CLR[u.role]} bg={ROLE_CLR[u.role]+"22"}>{ROLE_LABEL[u.role]}</Pill>
                   <Pill color={u.active?"#059669":"#94a3b8"} bg={u.active?"#ecfdf5":"#f1f5f9"}>{u.active?"Ativo":"Inativo"}</Pill>
